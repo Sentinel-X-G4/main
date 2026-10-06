@@ -105,18 +105,38 @@ services:
     healthcheck:
       disable: true
 
-  # --- services/human-detection-ia --------------------------------------------
-  # À activer quand le dépôt contiendra un Dockerfile. Publie {"person": bool} sur
-  # sentinelx/{device_id}/camera avec le compte MQTT « vision ».
-  # human-detection:
-  #   build: ./services/human-detection-ia
-  #   <<: *hardening
-  #   environment:
-  #     MQTT_HOST: mqtt.sentinel.lan
-  #     MQTT_PORT: 8883
-  #     MQTT_USERNAME: vision
-  #     MQTT_PASSWORD: ${MQTT_VISION_PASSWORD}
-  #     MQTT_CA: /certs/ca.crt
-  #   volumes:
-  #     - *mqtt-ca
-  #   networks: [sentinel-back]
+  # --- services/human-detection-ia : IA vision ---------------------------------
+  # Analyse le flux MJPEG de la webcam USB (host/capture.py, lancé sur l'hôte : `make
+  # capture` dans le sous-module) et publie {"ts", "person"} sur
+  # sentinelx/{CAMERA_DEVICE_ID}/camera avec le compte MQTT « vision ».
+  human-detection:
+    build:
+      context: ./services/human-detection-ia/detector
+      args:
+        YOLO_MODEL: ${YOLO_MODEL:-yolo11n.pt}
+    image: sentinel-x/human-detection:dev
+    container_name: sentinel-human-detection
+    <<: *hardening
+    init: true
+    environment:
+      STREAM_URL: ${CAMERA_STREAM_URL:-http://host.docker.internal:8088/stream}
+      YOLO_CONF: ${YOLO_CONF:-0.35}
+      MQTT_HOST: mqtt.sentinel.lan
+      MQTT_PORT: 8883
+      MQTT_USERNAME: vision
+      MQTT_PASSWORD: ${MQTT_VISION_PASSWORD}
+      MQTT_CA: /certs/ca.crt
+      MQTT_DEVICE_ID: ${CAMERA_DEVICE_ID:-esp01}   # même device_id que l'ESP de la pièce
+    volumes:
+      - *mqtt-ca
+    ports:
+      - "127.0.0.1:${CAMERA_PREVIEW_PORT:-8089}:8089"   # flux annoté (debug)
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    deploy:
+      resources:
+        limits:
+          cpus: "4"
+    depends_on:
+      sentinel-mosquitto: { condition: service_started }
+    networks: [sentinel-back]

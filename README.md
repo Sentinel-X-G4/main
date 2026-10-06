@@ -31,6 +31,7 @@ L'infra n'est **pas copiée** ici : `docker-compose.yml` inclut
 | `sentinel-db` | non (réseau `internal`) | PostgreSQL/TimescaleDB |
 | `sentinel-backend` | via le proxy | API REST + WebSocket, abonnée en MQTT |
 | `sentinel-detection` | `127.0.0.1:8000` (debug) | Détection temps réel |
+| `sentinel-human-detection` | `127.0.0.1:8089` (flux annoté) | IA vision : YOLO sur la webcam USB → MQTT `camera` |
 | `simulator` (profil `sim`) | — | Faux ESP + caméra |
 
 Les ports sont publiés sur `BIND_IP` uniquement (`192.168.40.1` sur le serveur).
@@ -68,6 +69,11 @@ make users       # comptes MQTT hashés depuis .env
 make up
 make sim         # données simulées (MQTT_SIMULATOR_PASSWORD requis dans .env)
 ```
+
+La webcam USB est lue sur l'hôte macOS (Docker n'a pas accès à l'USB) : lancer
+`make setup && make capture` dans `services/human-detection-ia`. Le conteneur
+`human-detection` consomme ce flux et publie la présence sur
+`sentinelx/${CAMERA_DEVICE_ID}/camera` (même `device_id` que l'ESP de la pièce).
 
 - API : `https://localhost/api/health`, `/api/v1/alerts`, `/api/v1/devices`
 - Détection (debug) : `http://localhost:8000/health`
