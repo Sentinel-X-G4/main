@@ -2,3 +2,5 @@
 .DS_Store
 .idea/
 .vscode/
+# PKI de Baptiste (clés privées) : jamais commitée
+secrets/
