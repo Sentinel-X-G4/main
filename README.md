@@ -80,7 +80,7 @@ make up
 make sim         # données simulées (MQTT_SIMULATOR_PASSWORD requis dans .env)
 ```
 
-La webcam USB est lue sur l'hôte macOS (Docker n'a pas accès à l'USB) : lancer
+La webcam USB est lue sur l'hôte macOS ou Windows (Docker n'a pas accès à l'USB) : lancer
 `make setup && make capture` dans `services/human-detection-ia`. Le conteneur
 `human-detection` consomme ce flux et publie la présence sur
 `sentinelx/${CAMERA_DEVICE_ID}/camera` (même `device_id` que l'ESP de la pièce).
