@@ -8,12 +8,13 @@
 #
 # L'infra (Mosquitto MQTTS, TimescaleDB, reverse proxy, réseaux) est celle de
 # services/sentinel-x-g4/infra : elle est incluse telle quelle, jamais copiée.
-# Tous les échanges entre services passent par MQTT (TLS + compte + ACL) :
+# MQTT (TLS + compte + ACL) : seul le service de détection écoute le broker.
 #   sentinelx/{device_id}/telemetry  ESP          → détection
 #   sentinelx/{device_id}/camera     IA vision    → détection
-#   sentinelx/{device_id}/detection  détection    → backend-api
-#   sentinelx/{device_id}/alert      ESP          → backend-api
-#   sentinelx/{device_id}/cmd        backend-api  → ESP
+#   sentinelx/{device_id}/alert      ESP          → détection
+#   sentinelx/{device_id}/detection  détection    → (publié, informatif)
+# Base (sentinel-db, réseau sentinel-data) : la détection écrit alertes et états d'appareils,
+# backend-api les lit et les relaie au dashboard (LISTEN/NOTIFY → WebSocket).
 
 name: sentinel-x
 
@@ -36,6 +37,7 @@ x-mqtt-ca: &mqtt-ca ./services/sentinel-x-g4/infra/mosquitto/certs/ca.crt:/certs
 
 services:
   # --- services/backend-api : REST + WebSocket, derrière le reverse proxy --------
+  # Ne parle pas à MQTT : lit la base (alertes, états) et écoute ses NOTIFY.
   sentinel-backend:
     build: ./services/backend-api
     image: sentinel-x/backend-api:dev
@@ -46,15 +48,10 @@ services:
       PORT: 5678                       # port attendu par infra/nginx/nginx.conf
       FRONTEND_URL: ${FRONTEND_URL:-https://dashboard.sentinel.lan}
       API_KEY: ${BACKEND_API_KEY:?BACKEND_API_KEY manquant dans .env (make backend-api-key)}
-      MQTT_URL: mqtts://mqtt.sentinel.lan:8883
-      MQTT_USERNAME: iot-backend
-      MQTT_PASSWORD: ${MQTT_BACKEND_PASSWORD}
-      MQTT_CA_FILE: /certs/ca.crt
-    volumes:
-      - *mqtt-ca
+      DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@sentinel-db:5432/${POSTGRES_DB}
     depends_on:
-      sentinel-mosquitto: { condition: service_started }
-    networks: [sentinel-front, sentinel-back]
+      sentinel-db: { condition: service_healthy }
+    networks: [sentinel-front, sentinel-data]
 
   # --- services/backend-iot-alerts : détection temps réel ---------------------
   detection-service:

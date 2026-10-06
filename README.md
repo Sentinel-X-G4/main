@@ -29,7 +29,7 @@ L'infra n'est **pas copiée** ici : `docker-compose.yml` inclut
 | `sentinel-reverse-proxy` | `443`, `80` (→ 443) | Seul point d'entrée HTTP(S) : `/api/` → backend |
 | `sentinel-mosquitto` | `8883` (MQTTS) | Broker, TLS + comptes + ACL |
 | `sentinel-db` | non (réseau `internal`) | PostgreSQL/TimescaleDB |
-| `sentinel-backend` | via le proxy | API REST + WebSocket, abonnée en MQTT |
+| `sentinel-backend` | via le proxy | API REST + WebSocket, lit la base (pas de MQTT) |
 | `sentinel-detection` | `127.0.0.1:8000` (debug) | Détection temps réel |
 | `sentinel-human-detection` | `127.0.0.1:8089` (flux annoté) | IA vision : YOLO sur la webcam USB → MQTT `camera` |
 | `simulator` (profil `sim`) | — | Faux ESP + caméra |
@@ -38,15 +38,16 @@ Les ports sont publiés sur `BIND_IP` uniquement (`192.168.40.1` sur le serveur)
 
 ## Flux MQTT
 
-Tous les échanges entre services passent par le broker, en TLS, avec un compte par rôle.
+Le broker (TLS, un compte par rôle) n'a qu'un seul abonné côté serveur : le service de
+détection (`backend-iot-alerts`). backend-api ne se connecte pas à MQTT.
 
 | Topic | De → vers | Compte |
 |---|---|---|
 | `sentinelx/{device_id}/telemetry` | ESP → détection | `sentinel_iot` |
 | `sentinelx/{device_id}/camera` | IA vision → détection | `vision` |
-| `sentinelx/{device_id}/detection` | détection → backend-api | `detection` |
-| `sentinelx/{device_id}/alert` | ESP → backend-api | `sentinel_iot` |
-| `sentinelx/{device_id}/cmd` / `ack` | backend-api ↔ ESP | `iot-backend` / `sentinel_iot` |
+| `sentinelx/{device_id}/detection` | détection → (publié, informatif) | `detection` |
+| `sentinelx/{device_id}/alert` | ESP → détection | `sentinel_iot` |
+| `sentinelx/{device_id}/cmd` / `ack` | (réservé, non utilisé) ↔ ESP | `iot-backend` / `sentinel_iot` |
 
 Droits : `services/sentinel-x-g4/infra/mosquitto/config/acl`. Formats des messages :
 `services/backend-iot-alerts/detection-service/docs/MQTT_CONTRACT.md`.
@@ -55,7 +56,13 @@ Droits : `services/sentinel-x-g4/infra/mosquitto/config/acl`. Formats des messag
 
 Une seule base (`sentinel-db`), un seul endroit pour son schéma :
 `services/sentinel-x-g4/infra/postgres/init/` (tables communes + schéma `detection`). Aucun
-service ne crée de table. Les scripts ne s'exécutent qu'à la création du volume : en dev,
+service ne crée de table.
+
+- Le service de détection écrit les mesures, les prédictions (`detection.predictions` = état de
+  chaque appareil) et les alertes (`public.alerts`, à l'activation d'une alerte ou sur
+  `sentinelx/+/alert`).
+- backend-api lit ces tables, acquitte les alertes, et écoute les `NOTIFY` posés par des triggers
+  (`sentinel_alerts`, `sentinel_devices`) pour pousser le temps réel au dashboard en WebSocket. Les scripts ne s'exécutent qu'à la création du volume : en dev,
 `docker compose down -v` pour repartir d'une base neuve.
 
 ## Démarrage
