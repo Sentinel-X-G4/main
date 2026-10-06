@@ -12,7 +12,7 @@
 #   sentinelx/{device_id}/camera     IA vision    → détection
 #   sentinelx/{device_id}/alert      ESP          → détection
 #   sentinelx/{device_id}/detection  détection    → (publié, informatif)
-# Base unique (services/backend_db, réseau sentinel-data) : la détection écrit alertes et
+# Base unique (services/database, réseau sentinel-data) : la détection écrit alertes et
 # états d'appareils, backend-api les lit et les relaie au dashboard (LISTEN/NOTIFY → WebSocket).
 #
 # Ports publiés UNIQUEMENT sur ${BIND_IP} (192.168.40.1 en prod) :
@@ -29,7 +29,7 @@ x-hardening: &hardening
   security_opt: ["no-new-privileges:true"]
   logging: *logging
 
-x-mqtt-ca: &mqtt-ca ./services/infrastructure/infra/mosquitto/certs/ca.crt:/certs/ca.crt:ro
+x-mqtt-ca: &mqtt-ca ./services/infrastructure/mosquitto/certs/ca.crt:/certs/ca.crt:ro
 
 services:
   # --- services/infrastructure : point d'entrée HTTP(S) unique ----------------------
@@ -45,8 +45,8 @@ services:
       - "${BIND_IP:-127.0.0.1}:443:443"
       - "${BIND_IP:-127.0.0.1}:80:80"          # redirige seulement vers 443
     volumes:
-      - ./services/infrastructure/infra/nginx/nginx.conf:/etc/nginx/nginx.conf:ro
-      - ./services/infrastructure/infra/nginx/certs:/etc/nginx/certs:ro
+      - ./services/infrastructure/nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./services/infrastructure/nginx/certs:/etc/nginx/certs:ro
     networks: [sentinel-front]
 
   # --- services/infrastructure : broker MQTT (TLS 8883 uniquement) -------------------
@@ -60,8 +60,8 @@ services:
     ports:
       - "${BIND_IP:-127.0.0.1}:8883:8883"
     volumes:
-      - ./services/infrastructure/infra/mosquitto/config:/mosquitto/config:ro
-      - ./services/infrastructure/infra/mosquitto/certs:/mosquitto/certs:ro
+      - ./services/infrastructure/mosquitto/config:/mosquitto/config:ro
+      - ./services/infrastructure/mosquitto/certs:/mosquitto/certs:ro
       - mosquitto-data:/mosquitto/data
     networks:
       sentinel-back:
@@ -69,10 +69,10 @@ services:
         # connectent sous ce nom pour que la vérification TLS du nom d'hôte passe.
         aliases: [mqtt.sentinel.lan]
 
-  # --- services/backend_db : base de données unique (jamais exposée) ----------------
+  # --- services/database : base de données unique (jamais exposée) ----------------
   db:
-    build: ./services/backend_db
-    image: sentinel-x/backend-db:dev
+    build: ./services/database
+    image: sentinel-x/database:dev
     container_name: g4-db
     <<: *hardening
     cap_drop: [ALL]
@@ -199,4 +199,4 @@ networks:
 
 volumes:
   mosquitto-data: {}
-  pg-data: {}                    # données de backend_db (volume existant conservé)
+  pg-data: {}                    # données de database (volume existant conservé)

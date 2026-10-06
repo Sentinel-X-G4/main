@@ -9,8 +9,8 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 S=secrets
-M=services/infrastructure/infra/mosquitto/certs
-N=services/infrastructure/infra/nginx/certs
+M=services/infrastructure/mosquitto/certs
+N=services/infrastructure/nginx/certs
 
 for f in ca.crt ca.key mosquitto.key proxy.key dhparam.pem; do
   [ -f "$S/$f" ] || { echo "Manquant : $S/$f" >&2; exit 1; }

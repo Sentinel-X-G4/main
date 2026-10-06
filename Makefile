@@ -1,4 +1,4 @@
-INFRA    := services/infrastructure/infra
+INFRA    := services/infrastructure
 FIRMWARE := services/software
 .PHONY: help init backend-api-key pull update push status certs pki users up down logs ps sim \
         db db-sql db-backup db-reset flash monitor
@@ -12,7 +12,7 @@ init:            ## Sous-modules (sur leur branche) + .env partagé avec l'infra
 	git submodule update --init --recursive
 	@git submodule foreach -q 'git checkout -q $$(git config -f $$toplevel/.gitmodules submodule.$$name.branch)'
 	@test -f .env || cp .env.example .env
-	@ln -sfn ../../../.env $(INFRA)/.env
+	@ln -sfn ../../.env $(INFRA)/.env
 	@$(MAKE) --no-print-directory backend-api-key
 
 backend-api-key: ## Génère BACKEND_API_KEY dans .env si elle est vide ou vaut change-me
@@ -46,7 +46,7 @@ certs:           ## PKI de Baptiste si secrets/ est présent, sinon certificats 
 	    openssl dhparam -dsaparam -out dhparam.pem 2048 && echo "OK : certificats DEV du proxy générés" ); fi
 
 pki:             ## Installe la PKI de Baptiste (secrets/) et signe les certificats serveur
-	bash infra/install-pki.sh
+	bash scripts/install-pki.sh
 
 users:           ## Comptes MQTT hashés depuis .env
 	@# variables exportées ici : `source <(...)` du script ne lit rien avec le bash 3.2 de macOS
@@ -69,7 +69,7 @@ ps:              ## État des conteneurs
 sim:             ## Injecte des données simulées
 	docker compose --profile sim run --rm simulator
 
-# --- Base de données (services/backend_db) ------------------------------------------------
+# --- Base de données (services/database) ------------------------------------------------
 
 db:              ## Shell psql dans la base
 	docker compose exec db sh -c 'psql -U "$$POSTGRES_USER" -d "$$POSTGRES_DB"'
@@ -83,7 +83,7 @@ db-backup:       ## Sauvegarde dans backups/ (format pg_dump custom)
 	docker compose exec -T db sh -c 'pg_dump -Fc -U "$$POSTGRES_USER" "$$POSTGRES_DB"' > backups/sentinel-$$(date +%Y%m%d-%H%M%S).dump
 	@ls -t backups | head -1
 
-db-reset:        ## Efface la base et la recrée depuis backend_db/db/init (DESTRUCTIF)
+db-reset:        ## Efface la base et la recrée depuis database/db/init (DESTRUCTIF)
 	@read -p "Effacer toutes les données de la base ? [o/N] " a && [ "$$a" = o ]
 	docker compose rm -sf db
 	docker volume rm sentinel-x_pg-data
