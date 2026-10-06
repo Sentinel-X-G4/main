@@ -14,3 +14,7 @@
 	path = services/backend-api
 	url = https://github.com/Sentinel-X-G4/backend-api.git
 	branch = main
+[submodule "services/software"]
+	path = services/software
+	url = https://github.com/Sentinel-X-G4/software.git
+	branch = master

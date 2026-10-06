@@ -4,3 +4,4 @@
 .vscode/
 # PKI de Baptiste (clés privées) : jamais commitée
 secrets/
+backups/

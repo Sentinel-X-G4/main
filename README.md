@@ -10,14 +10,17 @@ Docker Compose.
 main/
 ├── docker-compose.yml           # pile complète : inclut l'infra + services des sous-modules
 ├── infra/
-│   └── sentinel-x-g4.override.yml   # seul ajout à l'infra : alias TLS mqtt.sentinel.lan
+│   ├── sentinel-x-g4.override.yml   # seul ajout à l'infra : alias TLS mqtt.sentinel.lan
+│   └── install-pki.sh           # PKI de Baptiste (secrets/) → certificats MQTT et proxy
 ├── .env.example                 # configuration unique (copier en .env, jamais commité)
-├── Makefile                     # init, certs, users, up, sim, update…
+├── secrets/                     # PKI de Baptiste : ca.crt/key, clés… (jamais commité)
+├── Makefile                     # `make help` : dépôts, certificats, pile, base, firmware
 └── services/                    # sous-modules
     ├── sentinel-x-g4/           # infra durcie (MQTTS, ACL, TimescaleDB, proxy Nginx)
     ├── backend-api/             # API REST + WebSocket des alertes (Node.js)
     ├── backend-iot-alerts/      # service de détection (MQTT → modèle → résultats)
-    └── human-detection-ia/      # IA vision (détection de personnes)
+    ├── human-detection-ia/      # IA vision (détection de personnes)
+    └── software/                # firmware ESP8266 (PlatformIO, branche master)
 ```
 
 L'infra n'est **pas copiée** ici : `docker-compose.yml` inclut
@@ -71,7 +74,7 @@ service ne crée de table.
 git clone --recurse-submodules https://github.com/Sentinel-X-G4/main.git
 cd main
 make init        # sous-modules + .env (relié à l'infra) → remplir les mots de passe
-make certs       # certificats de DEV, seulement si ceux de Baptiste sont absents
+make certs       # PKI de Baptiste si secrets/ est rempli (make pki), sinon certificats de DEV
 make users       # comptes MQTT hashés depuis .env
 make up
 make sim         # données simulées (MQTT_SIMULATOR_PASSWORD requis dans .env)
@@ -83,7 +86,22 @@ La webcam USB est lue sur l'hôte macOS (Docker n'a pas accès à l'USB) : lance
 `sentinelx/${CAMERA_DEVICE_ID}/camera` (même `device_id` que l'ESP de la pièce).
 
 - API : `https://localhost/api/health`, `/api/v1/alerts`, `/api/v1/devices`
-- Détection (debug) : `http://localhost:8000/health`
+- Détection (debug) : `http://localhost:${DETECTION_API_PORT}/health`
+
+## Base de données au quotidien
+
+```bash
+make db                      # shell psql
+make db-sql F=migration.sql  # appliquer un script (ex. ALTER sur une base existante)
+make db-backup               # sauvegarde dans backups/ (non commité)
+make db-reset                # efface tout et rejoue postgres/init (confirmation demandée)
+```
+
+## Firmware (ESP8266)
+
+`services/software` est un projet PlatformIO (`pio` requis). ESP branché en USB :
+`make flash` puis `make monitor`. L'ESP doit embarquer `secrets/ca.crt` (CA de Baptiste) et
+se connecter en MQTTS à `192.168.40.1:8883` avec le compte `sentinel_iot`.
 
 ## Travailler avec les sous-modules
 
@@ -91,15 +109,15 @@ Chaque dossier de `services/` est un dépôt Git à part entière : on y commit 
 pousse normalement. Le parent enregistre le commit utilisé de chaque sous-module.
 
 ```bash
-make update                                  # derniers commits de chaque sous-module (main)
+make pull      # parent + chaque sous-module sur sa branche suivie (fast-forward)
+make status    # branche et commit de chaque sous-module
+make push      # push de chaque sous-module puis du parent
+make update    # derniers commits de chaque sous-module, puis :
 git add services && git commit -m "chore: bump submodules"
-
-git pull && git submodule update --init      # après un pull du parent
 ```
 
 > Après un `git pull` **dans** un sous-module, enregistrer le nouveau commit dans le
 > parent (`git add services/<repo>`) avant tout `git submodule update`, sinon ce dernier
 > remet le sous-module sur l'ancien commit.
 
-Ajouter un dépôt : `git submodule add -b main https://github.com/Sentinel-X-G4/<repo>.git services/<repo>`
-(le dépôt `software`, encore vide, pourra l'être dès son premier commit).
+Ajouter un dépôt : `git submodule add -b main https://github.com/Sentinel-X-G4/<repo>.git services/<repo>`.
