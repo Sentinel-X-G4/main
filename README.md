@@ -20,7 +20,10 @@ main/
     ├── backend-api/             # API REST + WebSocket des alertes (Node.js)
     ├── backend-iot-alerts/      # service de détection (MQTT → modèle → résultats)
     ├── human-detection-ia/      # IA vision (détection de personnes)
-    └── software/                # firmware ESP8266 (PlatformIO, branche master)
+    ├── software/                # firmware ESP8266 (PlatformIO, branche master)
+    ├── frontend-dashboard/      # dashboard web (vide pour l'instant)
+    └── backend_db/              # ancienne proposition de base (postgres:16, g4_epsi) :
+                                 # PAS utilisée par la pile, la base est sentinel-db (infra)
 ```
 
 L'infra n'est **pas copiée** ici : `docker-compose.yml` inclut

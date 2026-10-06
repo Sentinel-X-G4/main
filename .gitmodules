@@ -18,3 +18,11 @@
 	path = services/software
 	url = https://github.com/Sentinel-X-G4/software.git
 	branch = master
+[submodule "services/frontend-dashboard"]
+	path = services/frontend-dashboard
+	url = https://github.com/Sentinel-X-G4/frontend-dashboard.git
+	branch = main
+[submodule "services/backend_db"]
+	path = services/backend_db
+	url = https://github.com/Sentinel-X-G4/backend_db.git
+	branch = main
