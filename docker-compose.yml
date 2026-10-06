@@ -45,6 +45,7 @@ services:
       NODE_ENV: ${NODE_ENV:-production}
       PORT: 5678                       # port attendu par infra/nginx/nginx.conf
       FRONTEND_URL: ${FRONTEND_URL:-https://dashboard.sentinel.lan}
+      API_KEY: ${BACKEND_API_KEY:?BACKEND_API_KEY manquant dans .env}   # POST /api/v1/alerts
       MQTT_URL: mqtts://mqtt.sentinel.lan:8883
       MQTT_USERNAME: iot-backend
       MQTT_PASSWORD: ${MQTT_BACKEND_PASSWORD}
