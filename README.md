@@ -8,33 +8,30 @@ Docker Compose.
 
 ```
 main/
-├── docker-compose.yml           # pile complète : inclut l'infra + services des sous-modules
+├── docker-compose.yml           # SEUL compose du projet : tous les conteneurs
 ├── infra/
-│   ├── sentinel-x-g4.override.yml   # seul ajout à l'infra : alias TLS mqtt.sentinel.lan
 │   └── install-pki.sh           # PKI de Baptiste (secrets/) → certificats MQTT et proxy
 ├── .env.example                 # configuration unique (copier en .env, jamais commité)
 ├── secrets/                     # PKI de Baptiste : ca.crt/key, clés… (jamais commité)
 ├── Makefile                     # `make help` : dépôts, certificats, pile, base, firmware
 └── services/                    # sous-modules
-    ├── sentinel-x-g4/           # infra durcie (MQTTS, ACL, TimescaleDB, proxy Nginx)
+    ├── infrastructure/          # config durcie : Nginx, Mosquitto (MQTTS, ACL), scripts, certs
     ├── backend-api/             # API REST + WebSocket des alertes (Node.js)
     ├── backend-iot-alerts/      # service de détection (MQTT → modèle → résultats)
     ├── human-detection-ia/      # IA vision (détection de personnes)
     ├── software/                # firmware ESP8266 (PlatformIO, branche master)
     ├── frontend-dashboard/      # dashboard web (vide pour l'instant)
-    └── backend_db/              # ancienne proposition de base (postgres:16, g4_epsi) :
-                                 # PAS utilisée par la pile, la base est sentinel-db (infra)
+    └── backend_db/              # base de données unique : Dockerfile + schéma (db/init/)
 ```
 
-L'infra n'est **pas copiée** ici : `docker-compose.yml` inclut
-`services/sentinel-x-g4/infra/docker-compose.yml`. Toute évolution de l'infra se fait dans
-`sentinel-x-g4`.
+Un seul `docker-compose.yml`, ici. Les dépôts enfants ne contiennent que leur `Dockerfile`
+(construit par ce compose) ou de la configuration (montée par ce compose, ex. `infrastructure`).
 
 | Conteneur | Exposé | Rôle |
 |---|---|---|
 | `sentinel-reverse-proxy` | `443`, `80` (→ 443) | Seul point d'entrée HTTP(S) : `/api/` → backend |
 | `sentinel-mosquitto` | `8883` (MQTTS) | Broker, TLS + comptes + ACL |
-| `sentinel-db` | non (réseau `internal`) | PostgreSQL/TimescaleDB |
+| `g4-db` (service `db`) | non (réseau `internal`) | Base unique (`backend_db`) : PostgreSQL 16 + TimescaleDB |
 | `sentinel-backend` | via le proxy | API REST + WebSocket, lit la base (pas de MQTT) |
 | `sentinel-detection` | `127.0.0.1:8000` (debug) | Détection temps réel |
 | `sentinel-human-detection` | `127.0.0.1:8089` (flux annoté) | IA vision : YOLO sur la webcam USB → MQTT `camera` |
@@ -55,13 +52,13 @@ détection (`backend-iot-alerts`). backend-api ne se connecte pas à MQTT.
 | `sentinelx/{device_id}/alert` | ESP → détection | `sentinel_iot` |
 | `sentinelx/{device_id}/cmd` / `ack` | (réservé, non utilisé) ↔ ESP | `iot-backend` / `sentinel_iot` |
 
-Droits : `services/sentinel-x-g4/infra/mosquitto/config/acl`. Formats des messages :
+Droits : `services/infrastructure/infra/mosquitto/config/acl`. Formats des messages :
 `services/backend-iot-alerts/detection-service/docs/MQTT_CONTRACT.md`.
 
 ## Base de données
 
-Une seule base (`sentinel-db`), un seul endroit pour son schéma :
-`services/sentinel-x-g4/infra/postgres/init/` (tables communes + schéma `detection`). Aucun
+Une seule base (dépôt `backend_db`, service `db`), un seul endroit pour son schéma :
+`services/backend_db/db/init/` (tables communes + schéma `detection` + triggers NOTIFY). Aucun
 service ne crée de table.
 
 - Le service de détection écrit les mesures, les prédictions (`detection.predictions` = état de
@@ -97,7 +94,7 @@ La webcam USB est lue sur l'hôte macOS (Docker n'a pas accès à l'USB) : lance
 make db                      # shell psql
 make db-sql F=migration.sql  # appliquer un script (ex. ALTER sur une base existante)
 make db-backup               # sauvegarde dans backups/ (non commité)
-make db-reset                # efface tout et rejoue postgres/init (confirmation demandée)
+make db-reset                # efface tout et rejoue backend_db/db/init (confirmation demandée)
 ```
 
 ## Firmware (ESP8266)

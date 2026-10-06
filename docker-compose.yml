@@ -1,30 +1,26 @@
-# Pile complète Sentinel-X : infra commune (sentinel-x-g4) + services des sous-modules.
+# Pile complète Sentinel-X : SEUL docker-compose du projet. Les dépôts enfants (services/)
+# ne contiennent que des Dockerfile et de la configuration, montée ou construite ici.
 #
 #   make init      # sous-modules + .env
-#   make certs     # certificats de DEV (MQTT + proxy) si ceux de Baptiste sont absents
+#   make certs     # PKI de Baptiste (secrets/) ou certificats de DEV
 #   make users     # comptes MQTT hashés depuis .env
 #   make up
 #   make sim       # données simulées (MQTT_SIMULATOR_PASSWORD requis)
 #
-# L'infra (Mosquitto MQTTS, TimescaleDB, reverse proxy, réseaux) est celle de
-# services/sentinel-x-g4/infra : elle est incluse telle quelle, jamais copiée.
 # MQTT (TLS + compte + ACL) : seul le service de détection écoute le broker.
 #   sentinelx/{device_id}/telemetry  ESP          → détection
 #   sentinelx/{device_id}/camera     IA vision    → détection
 #   sentinelx/{device_id}/alert      ESP          → détection
 #   sentinelx/{device_id}/detection  détection    → (publié, informatif)
-# Base (sentinel-db, réseau sentinel-data) : la détection écrit alertes et états d'appareils,
-# backend-api les lit et les relaie au dashboard (LISTEN/NOTIFY → WebSocket).
+# Base unique (services/backend_db, réseau sentinel-data) : la détection écrit alertes et
+# états d'appareils, backend-api les lit et les relaie au dashboard (LISTEN/NOTIFY → WebSocket).
+#
+# Ports publiés UNIQUEMENT sur ${BIND_IP} (192.168.40.1 en prod) :
+#   443/80 -> reverse proxy (dashboard + API)     8883 -> Mosquitto (MQTTS)
 
 name: sentinel-x
 
-include:
-  - path:
-      - services/sentinel-x-g4/infra/docker-compose.yml
-      - infra/sentinel-x-g4.override.yml
-    env_file: .env
-
-x-logging: &logging
+x-logging: &logging           # MCO : logs plafonnés (3 x 10 Mo par conteneur)
   driver: json-file
   options: { max-size: "10m", max-file: "3" }
 
@@ -33,9 +29,62 @@ x-hardening: &hardening
   security_opt: ["no-new-privileges:true"]
   logging: *logging
 
-x-mqtt-ca: &mqtt-ca ./services/sentinel-x-g4/infra/mosquitto/certs/ca.crt:/certs/ca.crt:ro
+x-mqtt-ca: &mqtt-ca ./services/infrastructure/infra/mosquitto/certs/ca.crt:/certs/ca.crt:ro
 
 services:
+  # --- services/infrastructure : point d'entrée HTTP(S) unique ----------------------
+  sentinel-reverse-proxy:
+    image: nginx:1.27-alpine
+    container_name: sentinel-reverse-proxy
+    <<: *hardening
+    cap_drop: [ALL]
+    cap_add: [NET_BIND_SERVICE, CHOWN, SETUID, SETGID]
+    read_only: true
+    tmpfs: [/var/cache/nginx, /var/run, /tmp]
+    ports:
+      - "${BIND_IP:-127.0.0.1}:443:443"
+      - "${BIND_IP:-127.0.0.1}:80:80"          # redirige seulement vers 443
+    volumes:
+      - ./services/infrastructure/infra/nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./services/infrastructure/infra/nginx/certs:/etc/nginx/certs:ro
+    networks: [sentinel-front]
+
+  # --- services/infrastructure : broker MQTT (TLS 8883 uniquement) -------------------
+  sentinel-mosquitto:
+    image: eclipse-mosquitto:2
+    container_name: sentinel-mosquitto
+    <<: *hardening
+    user: "1883:1883"                          # non-root
+    cap_drop: [ALL]
+    read_only: true
+    ports:
+      - "${BIND_IP:-127.0.0.1}:8883:8883"
+    volumes:
+      - ./services/infrastructure/infra/mosquitto/config:/mosquitto/config:ro
+      - ./services/infrastructure/infra/mosquitto/certs:/mosquitto/certs:ro
+      - mosquitto-data:/mosquitto/data
+    networks:
+      sentinel-back:
+        # Le certificat du broker est émis pour mqtt.sentinel.lan : les conteneurs s'y
+        # connectent sous ce nom pour que la vérification TLS du nom d'hôte passe.
+        aliases: [mqtt.sentinel.lan]
+
+  # --- services/backend_db : base de données unique (jamais exposée) ----------------
+  db:
+    build: ./services/backend_db
+    image: sentinel-x/backend-db:dev
+    container_name: g4-db
+    <<: *hardening
+    cap_drop: [ALL]
+    cap_add: [CHOWN, SETUID, SETGID, DAC_OVERRIDE, FOWNER]
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:?POSTGRES_DB manquant dans .env}
+      POSTGRES_USER: ${POSTGRES_USER:?POSTGRES_USER manquant dans .env}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD manquant dans .env}
+    volumes:
+      - pg-data:/var/lib/postgresql/data
+    networks: [sentinel-data]
+
   # --- services/backend-api : REST + WebSocket, derrière le reverse proxy --------
   # Ne parle pas à MQTT : lit la base (alertes, états) et écoute ses NOTIFY.
   sentinel-backend:
@@ -48,9 +97,9 @@ services:
       PORT: 5678                       # port attendu par infra/nginx/nginx.conf
       FRONTEND_URL: ${FRONTEND_URL:-https://dashboard.sentinel.lan}
       API_KEY: ${BACKEND_API_KEY:?BACKEND_API_KEY manquant dans .env (make backend-api-key)}
-      DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@sentinel-db:5432/${POSTGRES_DB}
+      DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}
     depends_on:
-      sentinel-db: { condition: service_healthy }
+      db: { condition: service_healthy }
     networks: [sentinel-front, sentinel-data]
 
   # --- services/backend-iot-alerts : détection temps réel ---------------------
@@ -69,7 +118,7 @@ services:
       MQTT_TLS_CA_CERTS: /certs/ca.crt
       MQTT_USERNAME: detection
       MQTT_PASSWORD: ${MQTT_DETECTION_PASSWORD}
-      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@sentinel-db:5432/${POSTGRES_DB}
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}
       PREDICTOR: ${PREDICTOR:-rules}
       WARMUP_SECONDS: ${WARMUP_SECONDS:-120}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
@@ -80,7 +129,7 @@ services:
       - "127.0.0.1:${DETECTION_API_PORT:-8000}:8000"   # API d'admin/debug : jamais exposée hors de la machine
     depends_on:
       sentinel-mosquitto: { condition: service_started }
-      sentinel-db: { condition: service_healthy }
+      db: { condition: service_healthy }
     networks: [sentinel-back, sentinel-data]
 
   simulator:
@@ -138,3 +187,16 @@ services:
     depends_on:
       sentinel-mosquitto: { condition: service_started }
     networks: [sentinel-back]
+
+networks:
+  sentinel-front:                # proxy <-> backend/frontend
+    driver: bridge
+  sentinel-back:                 # services <-> mosquitto
+    driver: bridge
+  sentinel-data:                 # services <-> base : aucun accès extérieur
+    driver: bridge
+    internal: true
+
+volumes:
+  mosquitto-data: {}
+  pg-data: {}                    # données de backend_db (volume existant conservé)

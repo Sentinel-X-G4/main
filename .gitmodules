@@ -7,7 +7,7 @@
 	url = https://github.com/Sentinel-X-G4/human-detection-ia.git
 	branch = main
 [submodule "services/sentinel-x-g4"]
-	path = services/sentinel-x-g4
+	path = services/infrastructure
 	url = https://github.com/Sentinel-X-G4/infrastructure.git
 	branch = main
 [submodule "services/backend-api"]

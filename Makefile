@@ -1,4 +1,4 @@
-INFRA    := services/sentinel-x-g4/infra
+INFRA    := services/infrastructure/infra
 FIRMWARE := services/software
 .PHONY: help init backend-api-key pull update push status certs pki users up down logs ps sim \
         db db-sql db-backup db-reset flash monitor
@@ -69,23 +69,23 @@ ps:              ## État des conteneurs
 sim:             ## Injecte des données simulées
 	docker compose --profile sim run --rm simulator
 
-# --- Base de données (sentinel-db) ------------------------------------------------
+# --- Base de données (services/backend_db) ------------------------------------------------
 
 db:              ## Shell psql dans la base
-	docker compose exec sentinel-db sh -c 'psql -U "$$POSTGRES_USER" -d "$$POSTGRES_DB"'
+	docker compose exec db sh -c 'psql -U "$$POSTGRES_USER" -d "$$POSTGRES_DB"'
 
 db-sql:          ## Exécute un fichier SQL sur la base : make db-sql F=chemin.sql
 	@test -n "$(F)" || { echo "Usage : make db-sql F=chemin.sql"; exit 1; }
-	docker compose exec -T sentinel-db sh -c 'psql -v ON_ERROR_STOP=1 -U "$$POSTGRES_USER" -d "$$POSTGRES_DB"' < $(F)
+	docker compose exec -T db sh -c 'psql -v ON_ERROR_STOP=1 -U "$$POSTGRES_USER" -d "$$POSTGRES_DB"' < $(F)
 
 db-backup:       ## Sauvegarde dans backups/ (format pg_dump custom)
 	@mkdir -p backups
-	docker compose exec -T sentinel-db sh -c 'pg_dump -Fc -U "$$POSTGRES_USER" "$$POSTGRES_DB"' > backups/sentinel-$$(date +%Y%m%d-%H%M%S).dump
+	docker compose exec -T db sh -c 'pg_dump -Fc -U "$$POSTGRES_USER" "$$POSTGRES_DB"' > backups/sentinel-$$(date +%Y%m%d-%H%M%S).dump
 	@ls -t backups | head -1
 
-db-reset:        ## Efface la base et la recrée depuis postgres/init (DESTRUCTIF)
-	@read -p "Effacer toutes les données de sentinel-db ? [o/N] " a && [ "$$a" = o ]
-	docker compose rm -sf sentinel-db
+db-reset:        ## Efface la base et la recrée depuis backend_db/db/init (DESTRUCTIF)
+	@read -p "Effacer toutes les données de la base ? [o/N] " a && [ "$$a" = o ]
+	docker compose rm -sf db
 	docker volume rm sentinel-x_pg-data
 	docker compose up -d
 
