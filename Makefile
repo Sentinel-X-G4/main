@@ -1,10 +1,14 @@
 INFRA := services/sentinel-x-g4/infra
-.PHONY: init update status certs users up down logs ps sim
+.PHONY: init backend-api-key update status certs users up down logs ps sim
 
 init:            ## Sous-modules + .env partagé avec l'infra
 	git submodule update --init --recursive
 	@test -f .env || cp .env.example .env
 	@ln -sfn ../../../.env $(INFRA)/.env
+	@$(MAKE) --no-print-directory backend-api-key
+
+backend-api-key:         ## Génère BACKEND_API_KEY dans .env si elle est vide ou vaut change-me
+	@v=$$(sed -n 's/^BACKEND_API_KEY=//p' .env); 	if [ -z "$$v" ] || [ "$$v" = change-me ]; then 	  k=$$(openssl rand -hex 32) && 	  { grep -v '^BACKEND_API_KEY=' .env; echo "BACKEND_API_KEY=$$k"; } > .env.tmp && mv .env.tmp .env && 	  echo "OK : BACKEND_API_KEY générée dans .env"; 	fi
 
 update:          ## Met chaque sous-module à jour sur sa branche suivie
 	git submodule update --remote --merge
