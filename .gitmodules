@@ -1,0 +1,16 @@
+[submodule "services/backend-iot-alerts"]
+	path = services/backend-iot-alerts
+	url = https://github.com/Sentinel-X-G4/backend-iot-alerts.git
+	branch = main
+[submodule "services/human-detection-ia"]
+	path = services/human-detection-ia
+	url = https://github.com/Sentinel-X-G4/human-detection-ia.git
+	branch = main
+[submodule "services/sentinel-x-g4"]
+	path = services/sentinel-x-g4
+	url = https://github.com/Sentinel-X-G4/sentinel-x-g4.git
+	branch = main
+[submodule "services/backend-api"]
+	path = services/backend-api
+	url = https://github.com/Sentinel-X-G4/backend-api.git
+	branch = main

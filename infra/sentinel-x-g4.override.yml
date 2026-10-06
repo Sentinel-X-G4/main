@@ -1,0 +1,8 @@
+# Surcharge de services/sentinel-x-g4/infra/docker-compose.yml (fusionnée par `include`).
+# Le certificat du broker est émis pour mqtt.sentinel.lan : les conteneurs s'y connectent
+# sous ce nom pour que la vérification TLS du nom d'hôte passe.
+services:
+  sentinel-mosquitto:
+    networks:
+      sentinel-back:
+        aliases: [mqtt.sentinel.lan]

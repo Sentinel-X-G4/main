@@ -1,0 +1,122 @@
+# Pile complète Sentinel-X : infra commune (sentinel-x-g4) + services des sous-modules.
+#
+#   make init      # sous-modules + .env
+#   make certs     # certificats de DEV (MQTT + proxy) si ceux de Baptiste sont absents
+#   make users     # comptes MQTT hashés depuis .env
+#   make up
+#   make sim       # données simulées (MQTT_SIMULATOR_PASSWORD requis)
+#
+# L'infra (Mosquitto MQTTS, TimescaleDB, reverse proxy, réseaux) est celle de
+# services/sentinel-x-g4/infra : elle est incluse telle quelle, jamais copiée.
+# Tous les échanges entre services passent par MQTT (TLS + compte + ACL) :
+#   sentinelx/{device_id}/telemetry  ESP          → détection
+#   sentinelx/{device_id}/camera     IA vision    → détection
+#   sentinelx/{device_id}/detection  détection    → backend-api
+#   sentinelx/{device_id}/alert      ESP          → backend-api
+#   sentinelx/{device_id}/cmd        backend-api  → ESP
+
+name: sentinel-x
+
+include:
+  - path:
+      - services/sentinel-x-g4/infra/docker-compose.yml
+      - infra/sentinel-x-g4.override.yml
+    env_file: .env
+
+x-logging: &logging
+  driver: json-file
+  options: { max-size: "10m", max-file: "3" }
+
+x-hardening: &hardening
+  restart: unless-stopped
+  security_opt: ["no-new-privileges:true"]
+  logging: *logging
+
+x-mqtt-ca: &mqtt-ca ./services/sentinel-x-g4/infra/mosquitto/certs/ca.crt:/certs/ca.crt:ro
+
+services:
+  # --- services/backend-api : REST + WebSocket, derrière le reverse proxy --------
+  sentinel-backend:
+    build: ./services/backend-api
+    image: sentinel-x/backend-api:dev
+    container_name: sentinel-backend
+    <<: *hardening
+    environment:
+      NODE_ENV: ${NODE_ENV:-production}
+      PORT: 5678                       # port attendu par infra/nginx/nginx.conf
+      FRONTEND_URL: ${FRONTEND_URL:-https://dashboard.sentinel.lan}
+      MQTT_URL: mqtts://mqtt.sentinel.lan:8883
+      MQTT_USERNAME: iot-backend
+      MQTT_PASSWORD: ${MQTT_BACKEND_PASSWORD}
+      MQTT_CA_FILE: /certs/ca.crt
+    volumes:
+      - *mqtt-ca
+    depends_on:
+      sentinel-mosquitto: { condition: service_started }
+    networks: [sentinel-front, sentinel-back]
+
+  # --- services/backend-iot-alerts : détection temps réel ---------------------
+  detection-service:
+    build:
+      context: ./services/backend-iot-alerts/detection-service
+      args:
+        INSTALL_ORANGE: ${INSTALL_ORANGE:-false}
+    image: sentinel-x/detection-service:dev
+    container_name: sentinel-detection
+    <<: *hardening
+    environment:
+      MQTT_HOST: mqtt.sentinel.lan
+      MQTT_PORT: 8883
+      MQTT_TLS: "true"
+      MQTT_TLS_CA_CERTS: /certs/ca.crt
+      MQTT_USERNAME: detection
+      MQTT_PASSWORD: ${MQTT_DETECTION_PASSWORD}
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@sentinel-db:5432/${POSTGRES_DB}
+      PREDICTOR: ${PREDICTOR:-rules}
+      WARMUP_SECONDS: ${WARMUP_SECONDS:-120}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+    volumes:
+      - *mqtt-ca
+      - ./services/backend-iot-alerts/detection-service/models:/models:ro
+    ports:
+      - "127.0.0.1:${DETECTION_API_PORT:-8000}:8000"   # API d'admin/debug : jamais exposée hors de la machine
+    depends_on:
+      sentinel-mosquitto: { condition: service_started }
+      sentinel-db: { condition: service_healthy }
+    networks: [sentinel-back, sentinel-data]
+
+  simulator:
+    image: sentinel-x/detection-service:dev
+    profiles: ["sim"]
+    command:
+      - python
+      - tools/simulator.py
+      - --host=mqtt.sentinel.lan
+      - --port=8883
+      - --tls-ca=/certs/ca.crt
+      - --username=simulator
+      - --password=${MQTT_SIMULATOR_PASSWORD:-}
+      - --device=${SIM_DEVICE:-esp01}
+      - --sequence=${SIM_SEQUENCE:-normal:150,presence:30,normal:30,fuite_gaz:45,normal:60,feu:120,capteur_muet:20}
+    volumes:
+      - *mqtt-ca
+    networks: [sentinel-back]
+    depends_on: [sentinel-mosquitto]
+    healthcheck:
+      disable: true
+
+  # --- services/human-detection-ia --------------------------------------------
+  # À activer quand le dépôt contiendra un Dockerfile. Publie {"person": bool} sur
+  # sentinelx/{device_id}/camera avec le compte MQTT « vision ».
+  # human-detection:
+  #   build: ./services/human-detection-ia
+  #   <<: *hardening
+  #   environment:
+  #     MQTT_HOST: mqtt.sentinel.lan
+  #     MQTT_PORT: 8883
+  #     MQTT_USERNAME: vision
+  #     MQTT_PASSWORD: ${MQTT_VISION_PASSWORD}
+  #     MQTT_CA: /certs/ca.crt
+  #   volumes:
+  #     - *mqtt-ca
+  #   networks: [sentinel-back]
