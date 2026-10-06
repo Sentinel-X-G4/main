@@ -8,7 +8,7 @@
 	branch = main
 [submodule "services/sentinel-x-g4"]
 	path = services/sentinel-x-g4
-	url = https://github.com/Sentinel-X-G4/sentinel-x-g4.git
+	url = https://github.com/Sentinel-X-G4/infrastructure.git
 	branch = main
 [submodule "services/backend-api"]
 	path = services/backend-api
