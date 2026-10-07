@@ -1,6 +1,6 @@
 INFRA    := services/infrastructure
 FIRMWARE := services/software
-.PHONY: help init backend-api-key pull update push status certs pki users up down logs ps sim \
+.PHONY: help init backend-api-key vision-api-key pull update push status certs pki users up down logs ps sim \
         db db-sql db-backup db-reset flash monitor
 
 help:            ## Liste des commandes
@@ -14,9 +14,13 @@ init:            ## Sous-modules (sur leur branche) + .env partagé avec l'infra
 	@test -f .env || cp .env.example .env
 	@ln -sfn ../../.env $(INFRA)/.env
 	@$(MAKE) --no-print-directory backend-api-key
+	@$(MAKE) --no-print-directory vision-api-key
 
 backend-api-key: ## Génère BACKEND_API_KEY dans .env si elle est vide ou vaut change-me
 	@v=$$(sed -n 's/^BACKEND_API_KEY=//p' .env); 	if [ -z "$$v" ] || [ "$$v" = change-me ]; then 	  k=$$(openssl rand -hex 32) && 	  { grep -v '^BACKEND_API_KEY=' .env; echo "BACKEND_API_KEY=$$k"; } > .env.tmp && mv .env.tmp .env && 	  echo "OK : BACKEND_API_KEY générée dans .env"; 	fi
+
+vision-api-key: ## Génère VISION_API_KEY dans .env si elle est vide ou vaut change-me
+	@v=$$(sed -n 's/^VISION_API_KEY=//p' .env); 	if [ -z "$$v" ] || [ "$$v" = change-me ]; then 	  k=$$(openssl rand -hex 32) && 	  { grep -v '^VISION_API_KEY=' .env; echo "VISION_API_KEY=$$k"; } > .env.tmp && mv .env.tmp .env && 	  echo "OK : VISION_API_KEY générée dans .env"; 	fi
 
 pull:            ## Pull du parent puis de chaque sous-module sur sa branche (fast-forward)
 	git pull --ff-only

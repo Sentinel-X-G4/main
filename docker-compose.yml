@@ -9,7 +9,7 @@
 #
 # MQTT (TLS + compte + ACL) : seul le service de détection écoute le broker.
 #   sentinelx/{device_id}/telemetry  ESP          → détection
-#   sentinelx/{device_id}/camera     IA vision    → détection
+#   sentinelx/{device_id}/camera     IA vision    → détection (person + identité faciale)
 #   sentinelx/{device_id}/alert      ESP          → détection
 #   sentinelx/{device_id}/detection  détection    → (publié, informatif)
 # Base unique (services/database, réseau sentinel-data) : la détection écrit alertes et
@@ -100,9 +100,12 @@ services:
       DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}
       ADMIN_USERNAME: ${ADMIN_USERNAME:-admin}
       ADMIN_PASSWORD: ${ADMIN_PASSWORD:-}
+      # Visages autorisés et identité caméra : relayés vers l'API interne du détecteur
+      VISION_API_URL: http://sentinel-human-detection:8090
+      VISION_API_KEY: ${VISION_API_KEY:?VISION_API_KEY manquant dans .env (make vision-api-key)}
     depends_on:
       db: { condition: service_healthy }
-    networks: [sentinel-front, sentinel-data]
+    networks: [sentinel-front, sentinel-data, sentinel-vision]
 
   # --- services/frontend-dashboard : React (statique, nginx), derrière le reverse proxy
   sentinel-frontend:
@@ -164,8 +167,9 @@ services:
 
   # --- services/human-detection-ia : IA vision ---------------------------------
   # Analyse le flux MJPEG de la webcam USB (host/capture.py, lancé sur l'hôte : `make
-  # capture` dans le sous-module) et publie {"ts", "person"} sur
-  # sentinelx/{CAMERA_DEVICE_ID}/camera avec le compte MQTT « vision ».
+  # capture` dans le sous-module), reconnaît les visages autorisés et publie
+  # {"ts", "person", "identity", "names"} sur sentinelx/{CAMERA_DEVICE_ID}/camera avec le
+  # compte MQTT « vision ». API interne des visages (8090) : backend-api uniquement.
   human-detection:
     build:
       context: ./services/human-detection-ia/detector
@@ -184,8 +188,11 @@ services:
       MQTT_PASSWORD: ${MQTT_VISION_PASSWORD}
       MQTT_CA: /certs/ca.crt
       MQTT_DEVICE_ID: ${CAMERA_DEVICE_ID:-esp01}   # même device_id que l'ESP de la pièce
+      VISION_API_KEY: ${VISION_API_KEY:?VISION_API_KEY manquant dans .env (make vision-api-key)}
+      FACE_MATCH_THRESHOLD: ${FACE_MATCH_THRESHOLD:-0.363}
     volumes:
       - *mqtt-ca
+      - faces-data:/data                 # visages autorisés (empreintes + vignettes)
     ports:
       - "127.0.0.1:${CAMERA_PREVIEW_PORT:-8089}:8089"   # flux annoté (debug)
     extra_hosts:
@@ -196,7 +203,7 @@ services:
           cpus: "4"
     depends_on:
       sentinel-mosquitto: { condition: service_started }
-    networks: [sentinel-back]
+    networks: [sentinel-back, sentinel-vision]
 
 networks:
   sentinel-front:                # proxy <-> backend/frontend
@@ -206,7 +213,11 @@ networks:
   sentinel-data:                 # services <-> base : aucun accès extérieur
     driver: bridge
     internal: true
+  sentinel-vision:               # backend-api <-> API des visages du détecteur
+    driver: bridge
+    internal: true
 
 volumes:
   mosquitto-data: {}
   pg-data: {}                    # données de database (volume existant conservé)
+  faces-data: {}                 # visages autorisés (données biométriques : jamais sauvegardées hors machine)
