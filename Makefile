@@ -1,6 +1,6 @@
 INFRA    := services/infrastructure
 FIRMWARE := services/software
-.PHONY: help init backend-api-key vision-api-key pull update push status certs pki users up down logs ps sim \
+.PHONY: help init backend-api-key vision-api-key grafana-secrets pull update push status certs pki users up down logs ps sim \
         db db-sql db-backup db-reset flash monitor
 
 help:            ## Liste des commandes
@@ -15,12 +15,28 @@ init:            ## Sous-modules (sur leur branche) + .env partagé avec l'infra
 	@ln -sfn ../../.env $(INFRA)/.env 2>/dev/null || cp .env $(INFRA)/.env 2>/dev/null || true
 	@$(MAKE) --no-print-directory backend-api-key
 	@$(MAKE) --no-print-directory vision-api-key
+	@$(MAKE) --no-print-directory grafana-secrets
 
 backend-api-key: ## Génère BACKEND_API_KEY dans .env si elle est vide ou vaut change-me
 	@v=$$(sed -n 's/^BACKEND_API_KEY=//p' .env); 	if [ -z "$$v" ] || [ "$$v" = change-me ]; then 	  k=$$(openssl rand -hex 32) && 	  { grep -v '^BACKEND_API_KEY=' .env; echo "BACKEND_API_KEY=$$k"; } > .env.tmp && mv .env.tmp .env && 	  echo "OK : BACKEND_API_KEY générée dans .env"; 	fi
 
 vision-api-key: ## Génère VISION_API_KEY dans .env si elle est vide ou vaut change-me
 	@v=$$(sed -n 's/^VISION_API_KEY=//p' .env); 	if [ -z "$$v" ] || [ "$$v" = change-me ]; then 	  k=$$(openssl rand -hex 32) && 	  { grep -v '^VISION_API_KEY=' .env; echo "VISION_API_KEY=$$k"; } > .env.tmp && mv .env.tmp .env && 	  echo "OK : VISION_API_KEY générée dans .env"; 	fi
+
+# Génère la variable $(1) dans .env (openssl rand -hex $(2)) si elle est vide ou vaut change-me
+define gen-secret
+	@v=$$(sed -n 's/^$(1)=//p' .env); \
+	if [ -z "$$v" ] || [ "$$v" = change-me ]; then \
+	  k=$$(openssl rand -hex $(2)) && \
+	  { grep -v '^$(1)=' .env; echo "$(1)=$$k"; } > .env.tmp && mv .env.tmp .env && \
+	  echo "OK : $(1) générée dans .env"; \
+	fi
+endef
+
+grafana-secrets: ## Génère dans .env les mots de passe et la clé de Grafana s'ils sont vides
+	$(call gen-secret,GRAFANA_ADMIN_PASSWORD,16)
+	$(call gen-secret,GRAFANA_DB_PASSWORD,24)
+	$(call gen-secret,GRAFANA_SECRET_KEY,32)
 
 pull:            ## Pull du parent puis de chaque sous-module sur sa branche (fast-forward)
 	git pull --ff-only

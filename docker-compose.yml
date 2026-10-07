@@ -17,6 +17,7 @@
 #
 # Ports publiés UNIQUEMENT sur ${BIND_IP} (192.168.40.1 en prod) :
 #   443/80 -> reverse proxy (dashboard + API)     8883 -> Mosquitto (MQTTS)
+# Grafana : ${GRAFANA_BIND_IP}:${GRAFANA_PORT} (127.0.0.1:3000 par défaut).
 
 name: sentinel-x
 
@@ -205,6 +206,73 @@ services:
       sentinel-mosquitto: { condition: service_started }
     networks: [sentinel-back, sentinel-vision]
 
+  # --- grafana/ : supervision, lit la base avec un compte en lecture seule ------------
+  # grafana-db-init (one-shot, à chaque `up`) crée/met à jour ce compte depuis .env,
+  # y compris sur une base existante. Source de données et tableaux de bord provisionnés.
+  grafana-db-init:
+    image: sentinel-x/database:dev
+    container_name: sentinel-grafana-db-init
+    <<: *hardening
+    restart: "no"
+    user: postgres
+    cap_drop: [ALL]
+    read_only: true
+    environment:
+      PGHOST: db
+      PGDATABASE: ${POSTGRES_DB}
+      PGUSER: ${POSTGRES_USER}
+      PGPASSWORD: ${POSTGRES_PASSWORD}
+      GRAFANA_DB_USER: ${GRAFANA_DB_USER:?GRAFANA_DB_USER manquant dans .env}
+      GRAFANA_DB_PASSWORD: ${GRAFANA_DB_PASSWORD:?GRAFANA_DB_PASSWORD manquant dans .env (make grafana-secrets)}
+    entrypoint: ["sh", "-c", 'exec psql -X -q -v user="$$GRAFANA_DB_USER" -v password="$$GRAFANA_DB_PASSWORD" -f /db-user.sql']
+    volumes:
+      - ./grafana/db-user.sql:/db-user.sql:ro
+    healthcheck:
+      disable: true
+    depends_on:
+      db: { condition: service_healthy }
+    networks: [sentinel-data]
+
+  grafana:
+    image: grafana/grafana-oss:13.0.2
+    container_name: sentinel-grafana
+    <<: *hardening
+    cap_drop: [ALL]
+    read_only: true
+    tmpfs: [/tmp]
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:?GRAFANA_ADMIN_PASSWORD manquant dans .env (make grafana-secrets)}
+      GF_SECURITY_SECRET_KEY: ${GRAFANA_SECRET_KEY:?GRAFANA_SECRET_KEY manquant dans .env (make grafana-secrets)}
+      GF_SECURITY_DISABLE_GRAVATAR: "true"
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_AUTH_ANONYMOUS_ENABLED: "false"
+      GF_ANALYTICS_REPORTING_ENABLED: "false"
+      GF_ANALYTICS_CHECK_FOR_UPDATES: "false"
+      GF_ANALYTICS_CHECK_FOR_PLUGIN_UPDATES: "false"
+      GF_NEWS_NEWS_FEED_ENABLED: "false"
+      GF_PLUGINS_PREINSTALL_DISABLED: "true"     # aucun téléchargement de plugin au démarrage
+      GF_LOG_MODE: console
+      GF_SERVER_ROOT_URL: ${GRAFANA_ROOT_URL:-http://localhost:3000/}
+      # Lus par grafana/provisioning/datasources/postgres.yml
+      POSTGRES_DB: ${POSTGRES_DB}
+      GRAFANA_DB_USER: ${GRAFANA_DB_USER}
+      GRAFANA_DB_PASSWORD: ${GRAFANA_DB_PASSWORD}
+    volumes:
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./grafana/dashboards:/etc/grafana/dashboards:ro
+      - grafana-data:/var/lib/grafana
+    ports:
+      - "${GRAFANA_BIND_IP:-127.0.0.1}:${GRAFANA_PORT:-3000}:3000"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:3000/api/health || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    depends_on:
+      grafana-db-init: { condition: service_completed_successfully }
+    networks: [sentinel-data, sentinel-monitoring]
+
 networks:
   sentinel-front:                # proxy <-> backend/frontend
     driver: bridge
@@ -216,8 +284,11 @@ networks:
   sentinel-vision:               # backend-api <-> API des visages du détecteur
     driver: bridge
     internal: true
+  sentinel-monitoring:           # publication du port de Grafana (la base reste sur sentinel-data)
+    driver: bridge
 
 volumes:
   mosquitto-data: {}
   pg-data: {}                    # données de database (volume existant conservé)
   faces-data: {}                 # visages autorisés (données biométriques : jamais sauvegardées hors machine)
+  grafana-data: {}               # base interne de Grafana (utilisateurs, préférences)

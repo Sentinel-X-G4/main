@@ -1,0 +1,12 @@
+# Tableaux de bord versionnés : grafana/dashboards/*.json (montés en lecture seule).
+# Modifier dans l'interface puis exporter le JSON ici pour les conserver.
+apiVersion: 1
+
+providers:
+  - name: sentinel-x
+    folder: Sentinel-X
+    type: file
+    allowUiUpdates: false
+    disableDeletion: true
+    options:
+      path: /etc/grafana/dashboards

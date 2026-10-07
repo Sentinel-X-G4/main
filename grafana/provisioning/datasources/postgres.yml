@@ -1,0 +1,23 @@
+# Source de données provisionnée (non modifiable depuis l'interface).
+# Identifiants injectés par docker-compose depuis .env (compte lecture seule, cf. grafana/db-user.sql).
+apiVersion: 1
+
+datasources:
+  - name: Sentinel-X PostgreSQL
+    uid: sentinel-postgres
+    type: grafana-postgresql-datasource
+    access: proxy
+    url: db:5432
+    user: ${GRAFANA_DB_USER}
+    isDefault: true
+    editable: false
+    jsonData:
+      database: ${POSTGRES_DB}
+      sslmode: disable            # réseau Docker interne sentinel-data
+      postgresVersion: 1600
+      timescaledb: true
+      maxOpenConns: 10
+      maxIdleConns: 2
+      connMaxLifetime: 14400
+    secureJsonData:
+      password: ${GRAFANA_DB_PASSWORD}

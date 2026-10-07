@@ -1,0 +1,426 @@
+{
+  "uid": "sentinel-overview",
+  "title": "Sentinel-X — Vue d'ensemble",
+  "tags": [
+    "sentinel-x"
+  ],
+  "schemaVersion": 39,
+  "version": 1,
+  "editable": false,
+  "graphTooltip": 1,
+  "time": {
+    "from": "now-6h",
+    "to": "now"
+  },
+  "refresh": "30s",
+  "timezone": "browser",
+  "templating": {
+    "list": [
+      {
+        "name": "device",
+        "label": "Appareil",
+        "type": "query",
+        "datasource": {
+          "type": "grafana-postgresql-datasource",
+          "uid": "sentinel-postgres"
+        },
+        "query": "SELECT DISTINCT device_id FROM detection.sensor_readings WHERE received_at > now() - interval '30 days' ORDER BY 1",
+        "definition": "SELECT DISTINCT device_id FROM detection.sensor_readings",
+        "refresh": 2,
+        "multi": true,
+        "includeAll": true,
+        "current": {
+          "text": "All",
+          "value": "$__all"
+        }
+      }
+    ]
+  },
+  "panels": [
+    {
+      "id": 1,
+      "type": "stat",
+      "title": "Alertes non acquittées",
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "sentinel-postgres"
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 8,
+        "x": 0,
+        "y": 0
+      },
+      "fieldConfig": {
+        "defaults": {
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 1
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "sentinel-postgres"
+          },
+          "format": "table",
+          "editorMode": "code",
+          "rawQuery": true,
+          "rawSql": "SELECT count(*) FROM alerts WHERE NOT acknowledged"
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "type": "stat",
+      "title": "Alertes critiques (période)",
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "sentinel-postgres"
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 8,
+        "x": 8,
+        "y": 0
+      },
+      "fieldConfig": {
+        "defaults": {
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 1
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "sentinel-postgres"
+          },
+          "format": "table",
+          "editorMode": "code",
+          "rawQuery": true,
+          "rawSql": "SELECT count(*) FROM alerts WHERE severity = 'critical' AND $__timeFilter(time)"
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "type": "stat",
+      "title": "Appareils actifs (5 min)",
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "sentinel-postgres"
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 8,
+        "x": 16,
+        "y": 0
+      },
+      "fieldConfig": {
+        "defaults": {
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "green",
+                "value": 1
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "sentinel-postgres"
+          },
+          "format": "table",
+          "editorMode": "code",
+          "rawQuery": true,
+          "rawSql": "SELECT count(DISTINCT device_id) FROM detection.sensor_readings WHERE received_at > now() - interval '5 minutes'"
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "type": "timeseries",
+      "title": "Température",
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "sentinel-postgres"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 0,
+        "y": 4
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "celsius",
+          "custom": {
+            "spanNulls": true
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "sentinel-postgres"
+          },
+          "format": "time_series",
+          "editorMode": "code",
+          "rawQuery": true,
+          "rawSql": "SELECT $__timeGroupAlias(received_at, $__interval), device_id AS metric, avg(temp) AS value\nFROM detection.sensor_readings\nWHERE $__timeFilter(received_at) AND device_id IN ($device)\nGROUP BY 1, 2 ORDER BY 1"
+        }
+      ]
+    },
+    {
+      "id": 5,
+      "type": "timeseries",
+      "title": "Humidité",
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "sentinel-postgres"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 8,
+        "y": 4
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "humidity",
+          "custom": {
+            "spanNulls": true
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "sentinel-postgres"
+          },
+          "format": "time_series",
+          "editorMode": "code",
+          "rawQuery": true,
+          "rawSql": "SELECT $__timeGroupAlias(received_at, $__interval), device_id AS metric, avg(hum) AS value\nFROM detection.sensor_readings\nWHERE $__timeFilter(received_at) AND device_id IN ($device)\nGROUP BY 1, 2 ORDER BY 1"
+        }
+      ]
+    },
+    {
+      "id": 6,
+      "type": "timeseries",
+      "title": "Gaz (brut)",
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "sentinel-postgres"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 16,
+        "y": 4
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "custom": {
+            "spanNulls": true
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "sentinel-postgres"
+          },
+          "format": "time_series",
+          "editorMode": "code",
+          "rawQuery": true,
+          "rawSql": "SELECT $__timeGroupAlias(received_at, $__interval), device_id AS metric, avg(gas_raw) AS value\nFROM detection.sensor_readings\nWHERE $__timeFilter(received_at) AND device_id IN ($device)\nGROUP BY 1, 2 ORDER BY 1"
+        }
+      ]
+    },
+    {
+      "id": 7,
+      "type": "table",
+      "title": "Dernières alertes",
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "sentinel-postgres"
+      },
+      "gridPos": {
+        "h": 10,
+        "w": 24,
+        "x": 0,
+        "y": 12
+      },
+      "options": {
+        "showHeader": true,
+        "sortBy": [
+          {
+            "displayName": "time",
+            "desc": true
+          }
+        ]
+      },
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "severity"
+            },
+            "properties": [
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "color-background"
+                }
+              },
+              {
+                "id": "mappings",
+                "value": [
+                  {
+                    "type": "value",
+                    "options": {
+                      "critical": {
+                        "color": "red",
+                        "index": 0
+                      },
+                      "high": {
+                        "color": "orange",
+                        "index": 1
+                      },
+                      "medium": {
+                        "color": "yellow",
+                        "index": 2
+                      },
+                      "low": {
+                        "color": "blue",
+                        "index": 3
+                      }
+                    }
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "sentinel-postgres"
+          },
+          "format": "table",
+          "editorMode": "code",
+          "rawQuery": true,
+          "rawSql": "SELECT time, device_id, severity, source, title, description, acknowledged, acknowledged_by\nFROM alerts\nWHERE $__timeFilter(time)\nORDER BY time DESC\nLIMIT 200"
+        }
+      ]
+    }
+  ]
+}
