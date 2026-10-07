@@ -13,6 +13,7 @@ Il regroupe l'ensemble des composants du projet en sous-modules Git et orchestre
 4. [Guide d'Installation Pas-à-Pas](#guide-dinstallation-pas-à-pas)
 5. [Configuration & Flash du Firmware ESP8266](#configuration--flash-du-firmware-esp8266)
 6. [Guide de Test et Validation (Vérifier que tout fonctionne)](#guide-de-test-et-validation)
+   - [Guide Dédié : Vérification du Flux ESP ➔ Mosquitto ➔ Base de Données](README_VERIFICATION_FLUX.md)
 7. [Commandes Utiles (Makefile)](#commandes-utiles-makefile)
 8. [Résolution des Problèmes Courants (Troubleshooting)](#résolution-des-problèmes-courants-troubleshooting)
 
