@@ -118,10 +118,7 @@ services:
 
   # --- services/backend-iot-alerts : détection temps réel ---------------------
   detection-service:
-    build:
-      context: ./services/backend-iot-alerts/detection-service
-      args:
-        INSTALL_ORANGE: ${INSTALL_ORANGE:-false}
+    build: ./services/backend-iot-alerts/detection-service
     image: sentinel-x/detection-service:dev
     container_name: sentinel-detection
     <<: *hardening
@@ -133,12 +130,12 @@ services:
       MQTT_USERNAME: detection
       MQTT_PASSWORD: ${MQTT_DETECTION_PASSWORD}
       DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}
-      PREDICTOR: ${PREDICTOR:-rules}
+      PREDICTOR: ${PREDICTOR:-auto}
       WARMUP_SECONDS: ${WARMUP_SECONDS:-120}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
     volumes:
       - *mqtt-ca
-      - ./services/backend-iot-alerts/detection-service/models:/models:ro
+      - ./services/backend-iot-alerts/detection-service/models:/models:ro   # .pkcls exportés par Orange
     ports:
       - "127.0.0.1:${DETECTION_API_PORT:-8000}:8000"   # API d'admin/debug : jamais exposée hors de la machine
     depends_on:
