@@ -1,5 +1,7 @@
 INFRA    := services/infrastructure
 FIRMWARE := services/software
+# pio du PATH, sinon celui installé par l'extension PlatformIO de VS Code
+PIO      ?= $(shell command -v pio 2>/dev/null || echo $(HOME)/.platformio/penv/bin/pio)
 .PHONY: help init backend-api-key vision-api-key grafana-secrets pull update push status certs pki users up down logs ps sim \
         db db-sql db-backup db-reset flash monitor
 
@@ -112,7 +114,7 @@ db-reset:        ## Efface la base et la recrée depuis database/db/init (DESTRU
 # --- Firmware ESP8266 (services/software, PlatformIO) ---------------------------------
 
 flash:           ## Compile et flashe l'ESP branché en USB
-	cd $(FIRMWARE) && pio run -t upload
+	cd $(FIRMWARE) && $(PIO) run -t upload
 
 monitor:         ## Moniteur série de l'ESP (115200 bauds)
-	cd $(FIRMWARE) && pio device monitor
+	cd $(FIRMWARE) && $(PIO) device monitor
