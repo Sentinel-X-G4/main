@@ -2,7 +2,7 @@ INFRA    := services/infrastructure
 FIRMWARE := services/software
 # pio du PATH, sinon celui installé par l'extension PlatformIO de VS Code
 PIO      ?= $(shell command -v pio 2>/dev/null || echo $(HOME)/.platformio/penv/bin/pio)
-.PHONY: help init backend-api-key vision-api-key grafana-secrets pull update push status certs pki users up down logs ps sim \
+.PHONY: help init backend-api-key vision-api-key detection-admin-token grafana-secrets pull update push status certs pki users up down logs ps sim \
         db db-sql db-backup db-reset flash monitor
 
 help:            ## Liste des commandes
@@ -18,6 +18,7 @@ init:            ## Sous-modules (sur leur branche) + .env partagé avec l'infra
 	@$(MAKE) --no-print-directory backend-api-key
 	@$(MAKE) --no-print-directory vision-api-key
 	@$(MAKE) --no-print-directory grafana-secrets
+	@$(MAKE) --no-print-directory detection-admin-token
 
 backend-api-key: ## Génère BACKEND_API_KEY dans .env si elle est vide ou vaut change-me
 	@v=$$(sed -n 's/^BACKEND_API_KEY=//p' .env); 	if [ -z "$$v" ] || [ "$$v" = change-me ]; then 	  k=$$(openssl rand -hex 32) && 	  { grep -v '^BACKEND_API_KEY=' .env; echo "BACKEND_API_KEY=$$k"; } > .env.tmp && mv .env.tmp .env && 	  echo "OK : BACKEND_API_KEY générée dans .env"; 	fi
@@ -34,6 +35,9 @@ define gen-secret
 	  echo "OK : $(1) générée dans .env"; \
 	fi
 endef
+
+detection-admin-token: ## Génère DETECTION_ADMIN_TOKEN dans .env (service de détection <-> backend-api) si vide
+	$(call gen-secret,DETECTION_ADMIN_TOKEN,32)
 
 grafana-secrets: ## Génère dans .env les mots de passe et la clé de Grafana s'ils sont vides
 	$(call gen-secret,GRAFANA_ADMIN_PASSWORD,16)

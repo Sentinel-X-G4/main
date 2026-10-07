@@ -7,13 +7,17 @@
 #   make up
 #   make sim       # données simulées (MQTT_SIMULATOR_PASSWORD requis)
 #
-# MQTT (TLS + compte + ACL) : seul le service de détection écoute le broker.
+# MQTT (TLS + compte + ACL) : le service de détection est le seul service serveur connecté au
+# broker (mesures, caméra, commandes ESP). backend-api, seule porte du dashboard, lui parle en HTTP.
 #   sentinelx/{device_id}/telemetry  ESP          → détection
-#   sentinelx/{device_id}/camera     IA vision    → détection (person + identité faciale)
-#   sentinelx/{device_id}/alert      ESP          → détection
+#   sentinelx/{device_id}/camera     IA vision    → détection (person + identité faciale, visages vus)
+#   sentinelx/{device_id}/alert      ESP          → détection (le firmware actuel n'en publie plus)
 #   sentinelx/{device_id}/detection  détection    → (publié, informatif)
-# Base unique (services/database, réseau sentinel-data) : la détection écrit alertes et
-# états d'appareils, backend-api les lit et les relaie au dashboard (LISTEN/NOTIFY → WebSocket).
+#   sentinelx/{device_id}/cmd        détection    → ESP (alerte, buzzer, LED, écran, reset)
+#   sentinelx/{device_id}/ack        ESP          → détection (acquittement + état des sorties)
+# Base unique (services/database, réseau sentinel-data) : la détection écrit alertes, états
+# d'appareils et dernier état de la caméra ; backend-api les lit pour le dashboard (REST, qui
+# l'interroge toutes les 0,5 s).
 #
 # Ports publiés UNIQUEMENT sur ${BIND_IP} (192.168.40.1 en prod) :
 #   443/80 -> reverse proxy (dashboard + API)     8883 -> Mosquitto (MQTTS)
@@ -87,7 +91,8 @@ services:
     networks: [sentinel-data]
 
   # --- services/backend-api : REST + WebSocket, derrière le reverse proxy --------
-  # Ne parle pas à MQTT : lit la base (alertes, états) et écoute ses NOTIFY.
+  # Ne parle pas à MQTT : lit la base (alertes, états) et écoute ses NOTIFY ; relaie au service
+  # de détection (HTTP, sentinel-data) santé, entraînement et commandes ESP.
   sentinel-backend:
     build: ./services/backend-api
     image: sentinel-x/backend-api:dev
@@ -104,6 +109,8 @@ services:
       # Visages autorisés et identité caméra : relayés vers l'API interne du détecteur
       VISION_API_URL: http://sentinel-human-detection:8090
       VISION_API_KEY: ${VISION_API_KEY:?VISION_API_KEY manquant dans .env (make vision-api-key)}
+      # Routes d'action du service de détection (commandes ESP, rechargement du modèle)
+      DETECTION_ADMIN_TOKEN: ${DETECTION_ADMIN_TOKEN:?DETECTION_ADMIN_TOKEN manquant dans .env (make detection-admin-token)}
     depends_on:
       db: { condition: service_healthy }
     networks: [sentinel-front, sentinel-data, sentinel-vision]
@@ -133,6 +140,8 @@ services:
       PREDICTOR: ${PREDICTOR:-auto}
       WARMUP_SECONDS: ${WARMUP_SECONDS:-120}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      # Exigé par les routes d'action (POST /devices/{id}/..., /admin/...) : backend-api l'envoie
+      ADMIN_TOKEN: ${DETECTION_ADMIN_TOKEN:?DETECTION_ADMIN_TOKEN manquant dans .env (make detection-admin-token)}
     volumes:
       - *mqtt-ca
       - ./services/backend-iot-alerts/detection-service/models:/models:ro   # .pkcls exportés par Orange
