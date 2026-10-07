@@ -12,7 +12,7 @@ init:            ## Sous-modules (sur leur branche) + .env partagé avec l'infra
 	git submodule update --init --recursive
 	@git submodule foreach -q 'git checkout -q $$(git config -f $$toplevel/.gitmodules submodule.$$name.branch)'
 	@test -f .env || cp .env.example .env
-	@ln -sfn ../../.env $(INFRA)/.env
+	@ln -sfn ../../.env $(INFRA)/.env 2>/dev/null || cp .env $(INFRA)/.env 2>/dev/null || true
 	@$(MAKE) --no-print-directory backend-api-key
 
 backend-api-key: ## Génère BACKEND_API_KEY dans .env si elle est vide ou vaut change-me
