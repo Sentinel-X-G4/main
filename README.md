@@ -11,20 +11,17 @@ composants en sous-modules Git et contient la seule configuration Docker Compose
 
 ## Sommaire
 
-1. [Présentation](#présentation)
-2. [Architecture et stack](#architecture-et-stack)
-3. [Structure du dépôt](#structure-du-dépôt)
-4. [Prérequis](#prérequis)
-5. [Installation et configuration](#installation-et-configuration)
-6. [Lancement](#lancement)
-7. [Utilisation](#utilisation)
-8. [Tests et qualité](#tests-et-qualité)
-9. [Déploiement](#déploiement)
-10. [Sécurité](#sécurité)
-11. [Données et intégrations](#données-et-intégrations)
-12. [Dépannage](#dépannage)
-13. [Contribution](#contribution)
-14. [Licence, auteurs, changelog](#licence-auteurs-changelog)
+- [Présentation](#présentation)
+- [Architecture et stack](#architecture-et-stack)
+- [Structure du dépôt](#structure-du-dépôt)
+- [Prérequis](#prérequis)
+- [Installation et configuration](#installation-et-configuration)
+- [Lancement](#lancement)
+- [Utilisation](#utilisation)
+- [Déploiement](#déploiement)
+- [Sécurité](#sécurité)
+- [Données et intégrations](#données-et-intégrations)
+- [Dépannage](#dépannage)
 
 ---
 
@@ -35,9 +32,6 @@ surveiller des micro-centrales isolées contre trois menaces, à savoir les intr
 risques environnementaux (gaz, incendie, inondation) et les attaques réseau. Tout le calcul tourne
 sur un **PC Serveur Local** qui sert aussi de point d'accès Wi-Fi au boîtier.
 
-**Public.** Opérateurs de supervision (dashboard), administrateurs (comptes, visages, commandes
-de l'alarme) et équipe technique (Grafana, API de diagnostic).
-
 **Fonctionnalités**
 
 - Mesures en continu de l'ESP8266 (température, humidité, mouvement PIR, gaz MQ-2), envoyées environ 5 fois par seconde en MQTTS.
@@ -47,8 +41,6 @@ de l'alarme) et équipe technique (Grafana, API de diagnostic).
 - Dashboard React avec rôles (`user`, `admin`, `superadmin`) et connexion par mot de passe ou par visage.
 - Historique en PostgreSQL/TimescaleDB, supervision dans Grafana.
 - Enregistrement de sessions étiquetées pour entraîner de nouveaux modèles Orange.
-
-**Statut.** Prototype de workshop, en développement actif. <!-- À COMPLÉTER : statut officiel (démo, rendu final…) -->
 
 ---
 
@@ -96,7 +88,7 @@ flowchart LR
 1. **Mesures** : l'ESP publie sur `sentinelx/esp01/telemetry`. Le service de détection calcule des features sur des fenêtres de 2 s et de 60 s, puis applique le modèle. Il lisse les résultats et écrit en base les mesures, les fenêtres, les prédictions et les alertes.
 2. **Caméra** : `capture.py` (sur l'hôte) diffuse la webcam en MJPEG. Le détecteur publie `{person, identity, names, faces}` sur `sentinelx/esp01/camera`, et le service de détection enregistre ce dernier état dans `detection.camera_state`.
 3. **Alarme** : quand une alerte s'active, le service de détection publie `alert on` et un message à l'écran sur `sentinelx/esp01/cmd`. L'ESP répond sur `.../ack`.
-4. **Dashboard** : le navigateur interroge `GET /api/v1/overview` et l'image de la caméra toutes les 0,5 s, via le reverse proxy. Le backend lit la base et relaie en HTTP vers la détection et la vision. **Il ne se connecte pas à MQTT** et n'utilise pas de WebSocket.
+4. **Dashboard** : le navigateur interroge `GET /api/v1/overview` toutes les 0,5 s et reçoit l'image de la caméra par un flux MJPEG continu (`/api/v1/camera/stream`), via le reverse proxy. Le backend lit la base et relaie en HTTP vers la détection et la vision. **Il ne se connecte pas à MQTT** et n'utilise pas de WebSocket.
 
 ### Stack et versions
 
@@ -169,7 +161,7 @@ Chaque sous-module a son propre README, plus détaillé sur son composant.
 | Docker + Docker Compose v2 | toute la pile | Docker Desktop sous Windows/macOS |
 | Git | clone avec sous-modules | |
 | GNU Make + Bash | `Makefile`, scripts `.sh` | **Windows : Git Bash** (ou WSL). `make` : `winget install ezwinports.make` |
-| OpenSSL | génération des secrets (`make init`), certificats | Fourni avec Git Bash. `install-pki.sh` bascule sur un conteneur Alpine s'il est absent, **mais pas `make init`** |
+| OpenSSL | génération des secrets (`make init`), certificats | Fourni avec Git Bash |
 | Python 3.12 + ffmpeg (sur l'hôte) | capture de la webcam USB | Windows : `winget install Python.Python.3.12` et `winget install Gyan.FFmpeg` |
 | PlatformIO (CLI ou extension VS Code) | compiler et flasher l'ESP | Le Makefile trouve `pio` dans le PATH, puis dans `~/.platformio`, sinon `python -m platformio` |
 | Matériel | ESP8266 NodeMCU v3, DHT22, PIR, MQ-2, buzzer passif, LED rouge/verte, OLED SSD1306 I2C, webcam USB | Câblage : [Config.h](services/software/include/Config.h) |
@@ -206,13 +198,12 @@ make users
 - il génère les secrets vides ou valant `change-me` : `BACKEND_API_KEY`, `VISION_API_KEY`, `DETECTION_ADMIN_TOKEN`, `GRAFANA_ADMIN_PASSWORD`, `GRAFANA_DB_PASSWORD` et `GRAFANA_SECRET_KEY` ;
 - il ne touche pas aux mots de passe PostgreSQL et MQTT : **remplissez-les vous-même**.
 
-> Sous Windows, `services/infrastructure/.env` est souvent une **copie** et non un lien. Après
-> avoir modifié `main/.env`, relancez `make init` (ou recopiez le fichier) pour que les scripts de
-> l'infra voient les nouvelles valeurs. <!-- À VÉRIFIER : ln -sfn sous Git Bash crée une copie sans mode développeur -->
+> Sous Windows, `services/infrastructure/.env` peut être une copie : après avoir modifié
+> `main/.env`, relancez `make init`.
 
 `make certs` dépend de la présence de `secrets/ca.key` :
 - **Si elle est présente**, il lance `scripts/install-pki.sh`. Le certificat Mosquitto couvre `mqtt.sentinel.lan`, `localhost`, `192.168.40.1`, `127.0.0.1` et le `BIND_IP` du `.env`. Le certificat du proxy couvre en plus `dashboard.sentinel.lan` et `sentinel.local`.
-- **Sinon**, il génère des certificats de DEV valables 30 jours. Leur SAN **n'inclut pas** `BIND_IP` : un ESP sur le réseau ne pourra pas valider le broker, donc utilisez la vraie PKI pour l'ESP.
+- **Sinon**, il génère des certificats de DEV valables 30 jours, pour un usage local (l'ESP utilise la PKI de `secrets/`).
 
 Si vous modifiez `BIND_IP`, relancez `make certs` puis `make up`.
 
@@ -254,9 +245,6 @@ Le modèle complet est [`.env.example`](.env.example). Ne commitez jamais `.env`
 | `GRAFANA_DB_USER` | compte PostgreSQL lecture seule | oui | `grafana_reader` |
 | `GRAFANA_ADMIN_PASSWORD` / `GRAFANA_DB_PASSWORD` / `GRAFANA_SECRET_KEY` | secrets Grafana | oui | générés par `make init` |
 
-Les variables `SIM_SEQUENCE` (séquence du simulateur) et `INSTALL_ORANGE` existent aussi. La
-seconde n'est lue par aucun fichier de la pile.
-
 ---
 
 ## Lancement
@@ -292,9 +280,8 @@ py -3.12 -m venv .venv
 Au premier lancement, le pare-feu Windows demande d'autoriser Python : acceptez au moins pour les
 réseaux privés. Sinon, le conteneur ne joint pas le port 8088.
 
-> N'utilisez **pas** `make up` dans `services/human-detection-ia` quand la pile tourne : cette
-> commande lance un détecteur autonome (`human-detector`) qui entre en conflit avec le port 8089 de
-> la pile.
+> Dans `services/human-detection-ia`, n'utilisez que `make setup` et `make capture` : son
+> `make up` lance un détecteur autonome, déjà fourni par la pile.
 
 ### Ports
 
@@ -342,15 +329,16 @@ Connexion avec `ADMIN_USERNAME` / `ADMIN_PASSWORD` (superadmin créé au premier
 
 | Page | user | admin | superadmin |
 |---|:-:|:-:|:-:|
-| Supervision (indicateurs, webcam + identité, appareils, courbes, alertes) | ✓ | ✓ | ✓ |
+| Supervision (état du site, webcam + identité, alarme, courbes, alertes) | ✓ | ✓ | ✓ |
 | Alertes (historique filtrable) | lecture | + acquittement | + acquittement, suppression |
 | Comptes | | comptes `user` | tous |
 | Visages autorisés | | ✓ | ✓ |
 | Service IoT (santé de la détection) | | ✓ | ✓ |
 | Mon compte | ✓ | ✓ | ✓ |
 
-La connexion par visage est possible pour les rôles `user` et `admin` : saisir son identifiant
-et se placer seul face à la caméra. Elle n'est pas proposée aux superadmins.
+La connexion par visage est possible pour tous les rôles dont un visage est enregistré sous
+l'identifiant : saisir son identifiant et se placer seul face à la caméra. Seule restriction : un
+superadmin ne peut pas être un compte **sans** mot de passe.
 
 ### API
 
@@ -402,7 +390,7 @@ dans l'interface, puis exportez le JSON dans [grafana/dashboards/](grafana/dashb
 
 ### Entraîner les modèles Orange
 
-1. Enregistrer des sessions étiquetées avec `POST /recording/start|stop` sur l'API de la détection (`127.0.0.1:${DETECTION_API_PORT}`), ou avec `/api/v1/iot/recording/*` du backend en superadmin. Le dashboard n'a pas encore d'écran pour cela.
+1. Enregistrer des sessions étiquetées avec `POST /recording/start|stop` sur l'API de la détection (`127.0.0.1:${DETECTION_API_PORT}`), ou avec `/api/v1/iot/recording/*` du backend en superadmin.
 2. Exporter les données :
 
    ```bash
@@ -429,25 +417,9 @@ make db-reset                 # DESTRUCTIF : supprime le volume et rejoue db/ini
 
 ---
 
-## Tests et qualité
-
-Il n'y a **aucune CI** et **aucune suite de tests automatisés** exécutable dans l'état actuel :
-
-- `backend-api` : `npm test` n'est pas implémenté. Le lint se lance avec `npm run lint` / `npm run lint:fix` (ESLint).
-- `detection-service` : `pytest` est configuré dans `pyproject.toml`, mais le dossier `tests/` est absent du dépôt.
-- `frontend-dashboard` et firmware : pas de tests.
-
-Les validations se font donc manuellement :
-- `make sim` ;
-- le [guide de vérification du flux](README_VERIFICATION_FLUX.md) ;
-- `GET /health` de la détection ;
-- les healthchecks Docker.
-
----
-
 ## Déploiement
 
-Il n'y a pas de pipeline : on déploie en exécutant la même procédure sur le PC Serveur Local.
+Le déploiement reprend la procédure d'installation, sur le PC Serveur Local.
 
 1. Sur le serveur : `BIND_IP=192.168.40.1` (IP prévue par les certificats), `MQTT_SIMULATOR_PASSWORD` vide, mots de passe forts.
 2. `make init`, puis `make certs` avec la vraie PKI dans `secrets/`, puis `make users` et `make up`.
@@ -457,9 +429,8 @@ Il n'y a pas de pipeline : on déploie en exécutant la même procédure sur le 
 Pour mettre à jour : `make pull` (parent et sous-modules en fast-forward), puis `make up`. La
 commande `up` reconstruit les images.
 
-Pour revenir en arrière : il n'y a pas de procédure dédiée. Il faut revenir au commit précédent du
-parent, puis lancer `git submodule update` et `make up`. Faites un `make db-backup` avant toute
-mise à jour.
+Pour revenir en arrière : revenir au commit précédent du parent, puis `git submodule update` et
+`make up`. Faites un `make db-backup` avant toute mise à jour.
 
 Un changement de schéma sur une base existante n'est pas rejoué automatiquement, car `db/init` ne
 s'exécute que sur un volume vide. Appliquez le fichier de `services/database/db/migrations/` avec
@@ -502,12 +473,6 @@ s'exécute que sur un volume vide. Appliquez le fichier de `services/database/db
 **Données biométriques**
 - Les empreintes de visages (volume `faces-data`) sont des données sensibles (RGPD, art. 9) : elles ne quittent jamais la machine et ne sont pas sauvegardées.
 
-**Limites connues**
-- Les routes `/recording/*` de l'API de la détection ne demandent pas de jeton : elles ne sont protégées que par la publication sur `127.0.0.1`.
-- Le certificat client n'est pas exigé par Mosquitto (`require_certificate false`).
-
-Pour signaler une faille : <!-- À COMPLÉTER : contact / procédure -->
-
 ---
 
 ## Données et intégrations
@@ -518,7 +483,6 @@ Pour signaler une faille : <!-- À COMPLÉTER : contact / procédure -->
 |---|---|---|
 | `sentinelx/esp01/telemetry` | ESP → détection (~5 msg/s) | `sentinel_iot` |
 | `sentinelx/esp01/ack` | ESP → détection | `sentinel_iot` |
-| `sentinelx/esp01/alert` | ESP → détection (plus publié par le firmware actuel) | `sentinel_iot` |
 | `sentinelx/esp01/cmd` | détection → ESP | `detection` |
 | `sentinelx/+/camera` | vision → détection (au moins 1 msg/s) | `vision`, `simulator` |
 | `sentinelx/+/detection` | détection → (informatif) | `detection` |
@@ -541,7 +505,7 @@ Les contrats détaillés sont dans [MQTT_CONTRACT.md](services/backend-iot-alert
 
 | Table | Écrite par | Lue par |
 |---|---|---|
-| `public.alerts` | détection (activation d'une alerte) | backend (liste, stats, acquittement), Grafana |
+| `public.alerts` | détection (activation d'une alerte), backend (alerte donnée depuis le dashboard) | backend (liste, stats, acquittement), Grafana |
 | `public.users` | backend | backend |
 | `detection.sensor_readings`, `camera_events`, `feature_windows` (hypertables) | détection | détection (entraînement), Grafana |
 | `detection.predictions` | détection (changement d'état + heartbeat 10 s) | backend (état des appareils) |
@@ -549,10 +513,7 @@ Les contrats détaillés sont dans [MQTT_CONTRACT.md](services/backend-iot-alert
 | `detection.recording_sessions` | détection | détection |
 
 Le schéma est défini à un seul endroit, [services/database/db/init/](services/database/db/init/) ;
-aucun service ne crée de table. Les triggers `NOTIFY` sont définis dans `03_notify.sql`.
-
-Volume indicatif : environ 430 000 mesures par jour et par appareil. Une politique de rétention
-TimescaleDB est recommandée, mais n'est pas configurée.
+aucun service ne crée de table.
 
 ### Volumes Docker
 
@@ -585,7 +546,6 @@ autres à la main.
 - `ESP_MQTT_HOST` diffère de `BIND_IP` : reflashez.
 - Les certificats de DEV sont utilisés : leur SAN n'inclut pas l'IP du LAN.
 - Pas d'Internet, donc pas de NTP : le firmware valide alors les dates par rapport à la date de compilation. Recompilez si la CA est plus récente que le firmware.
-- Le pare-feu Windows bloque 8883 en entrée. <!-- À VÉRIFIER -->
 
 **`sentinel-human-detection` n'affiche aucune détection**
 `capture.py` ne tourne pas sur l'hôte, ou le pare-feu bloque le port 8088. Testez avec
@@ -612,43 +572,3 @@ docker logs -f sentinel-backend
 docker logs -f sentinel-mosquitto
 docker logs -f sentinel-human-detection
 ```
-
----
-
-## Contribution
-
-Chaque composant vit dans **son propre dépôt** : on commite dans le sous-module, puis on met à jour
-la référence dans `main`.
-
-```bash
-make status     # commit et branche de chaque sous-module
-make pull       # pull du parent puis de chaque sous-module (fast-forward)
-make update     # avance chaque sous-module sur sa branche suivie
-make push       # push des sous-modules (branche courante) puis du parent
-```
-
-Conventions observées dans l'historique :
-- messages de commit `feat:`, `fix:`, `doc:`, `chore:`, `security:` ;
-- branche `main`, sauf `software` qui suit `master` ;
-- chaque PR passe par GitHub.
-
-Quand on modifie un contrat, plusieurs fichiers doivent rester alignés :
-
-| Changement | Fichiers à aligner |
-|---|---|
-| Schéma de la base | `database/db/init/02_detection.sql` ↔ `detection_service/storage/tables.py` ; `alerts` ↔ `backend-api/db.js` ; ajouter une migration |
-| Topics MQTT | `mosquitto/config/acl` ↔ `docs/MQTT_CONTRACT.md` ↔ firmware |
-| Nouvelle variable | `.env.example` + `docker-compose.yml` + ce README |
-
-<!-- À COMPLÉTER : règles de revue de code, style imposé -->
-
----
-
-## Licence, auteurs, changelog
-
-**Licence** : <!-- À COMPLÉTER : aucune licence définie pour le dépôt parent (backend-api déclare ISC dans package.json) -->
-
-**Auteurs** : groupe G4, Workshop EPSI M1 2026-27. <!-- À COMPLÉTER : noms et rôles de chaque membre -->
-
-**Changelog** : pas de fichier dédié. Consultez `git log` du dépôt parent et de chaque sous-module.
-<!-- À COMPLÉTER : versions / jalons -->
