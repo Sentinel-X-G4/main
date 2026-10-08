@@ -199,24 +199,22 @@ Tous les conteneurs doivent être `Up` et `healthy`.
 
 Le firmware se trouve dans le sous-module `services/software`.
 
-### 1. Configuration des paramètres (`Config.h`)
+### 1. Identifiants (`.env`)
 
-Ouvrez le fichier [`services/software/include/Config.h`](file:///c:/Users/aurel/OneDrive/Documents/M1/Workshop/main/services/software/include/Config.h) :
+Aucun secret n'est écrit dans le code du firmware : ils sont lus dans le `.env` de la pile, à
+remplir une seule fois :
 
-```cpp
-// --- NETWORK & SERVER ---
-static const char *WIFI_SSID = "NOM_DE_VOTRE_BOX_OU_PARTAGE";
-static const char *WIFI_PASSWORD = "MOT_DE_PASSE_WIFI";
-
-static const char *SERVER_HOST = "<BIND_IP>"; // IP de votre machine (variable BIND_IP du .env)
-constexpr int WEBSOCKET_PORT = 8080;
-
-// MQTTS broker (Port 8883 sécurisé par TLS)
-static const char *MQTT_HOST = "<BIND_IP>";   // Même IP que BIND_IP dans .env
-constexpr uint16_t MQTT_PORT = 8883;
-static const char *MQTT_USERNAME = "sentinel_iot";
-static const char *MQTT_PASSWORD = "<MQTT_ESP_PASSWORD>"; // Doit correspondre à MQTT_ESP_PASSWORD dans .env
+```ini
+ESP_WIFI_SSID=NOM_DU_RESEAU_2_4GHZ
+ESP_WIFI_PASSWORD=MOT_DE_PASSE_WIFI
+ESP_MQTT_HOST=<BIND_IP>          # IP de la machine qui fait tourner la pile
+MQTT_ESP_PASSWORD=...            # déjà utilisé par `make users` pour le compte sentinel_iot
 ```
+
+À chaque compilation, `services/software/scripts/secrets.py` génère `include/Secrets.h` (ignoré
+par Git) à partir de ces valeurs ; une variable d'environnement du même nom est prioritaire. Si
+une valeur manque, la compilation s'arrête en la nommant. Le reste de la configuration (broches,
+seuils, `DEVICE_ID`, port 8883) est dans `services/software/include/Config.h`.
 
 ### 2. Certificat CA embarqué automatique
 
