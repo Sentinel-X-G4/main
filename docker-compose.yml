@@ -164,7 +164,7 @@ services:
       - --username=simulator
       - --password=${MQTT_SIMULATOR_PASSWORD:-}
       - --device=${SIM_DEVICE:-esp01}
-      - --sequence=${SIM_SEQUENCE:-normal:150,presence:30,normal:30,fuite_gaz:45,normal:60,feu:120,capteur_muet:20}
+      - --sequence=${SIM_SEQUENCE:-normal:150,presence:30,normal:30,fuite_gaz:45,normal:60,feu:120,normal:180,inondation:90,capteur_muet:20}
     volumes:
       - *mqtt-ca
     networks: [sentinel-back]
