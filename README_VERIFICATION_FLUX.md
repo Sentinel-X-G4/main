@@ -10,7 +10,7 @@ Ce document décrit et détaille comment tester et vérifier de bout en bout que
 ┌──────────────┐          MQTTS (8883, TLS)          ┌──────────────────┐
 │   ESP8266    │ ──────────────────────────────────> │    Mosquitto     │
 │  (Hardware)  │  sentinelx/{device_id}/telemetry    │  (Broker MQTTS)  │
-└──────────────┘  sentinelx/{device_id}/alert        └─────────┬────────┘
+└──────────────┘  (sentinelx/{device_id}/alert)      └─────────┬────────┘
                                                                │ (Topics souscrits)
                                                                ▼
                                                      ┌──────────────────┐
@@ -42,7 +42,16 @@ Ce document décrit et détaille comment tester et vérifier de bout en bout que
 
 ## 3. Procédure de Test et Vérification Pas-à-Pas
 
-Les commandes ci-dessous utilisent les variables d'environnement définies dans votre `.env` (`${BIND_IP}`, `${MQTT_ESP_PASSWORD}`) et fonctionnent sur **Linux**, **macOS** et **Windows** (Git Bash, WSL ou PowerShell).
+Les commandes ci-dessous sont en syntaxe Bash : **Linux**, **macOS**, ou **Windows avec Git Bash / WSL**
+(pas PowerShell). Elles utilisent des variables du `.env` (`${BIND_IP}`, `${MQTT_ESP_PASSWORD}`,
+`${DETECTION_API_PORT}`) : chargez-les d'abord depuis `main/` :
+
+```bash
+set -a; source <(tr -d '\r' < .env); set +a
+export MSYS_NO_PATHCONV=1   # Git Bash : ne pas convertir les chemins de -v
+```
+
+Les requêtes SQL utilisent `-U sentinel -d sentinel` (valeurs par défaut de `POSTGRES_USER` / `POSTGRES_DB`).
 
 ### Étape 1 : Vérifier que les services sont actifs
 
@@ -89,9 +98,11 @@ docker exec g4-db psql -U sentinel -d sentinel -c \
 
 ---
 
-### Étape 3 : Envoyer une alerte seuil (Simulation ESP)
+### Étape 3 : Envoyer une alerte brute sur le topic `alert` (facultatif)
 
-Lorsqu'un seuil critique de gaz ou température est franchi, l'ESP émet sur `sentinelx/{device_id}/alert` :
+Le firmware actuel ne publie plus sur `sentinelx/{device_id}/alert` (pas de seuil local : les
+alertes sont calculées par le service de détection). Le topic reste autorisé par l'ACL et traité
+par le service ; ce test vérifie seulement ce chemin :
 
 ```bash
 echo '{"type": "local_threshold", "value": true}' | \
@@ -131,7 +142,7 @@ Pour surveiller le flux en temps réel pendant que votre ESP physique fonctionne
 
 3. **Consulter l'état de l'appareil via l'API de diagnostic :**
    ```bash
-   curl -s http://127.0.0.1:18000/health
+   curl -s http://127.0.0.1:${DETECTION_API_PORT:-8000}/health
    ```
    Ce endpoint confirme :
    - `"mqtt":{"connected":true}`

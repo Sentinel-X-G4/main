@@ -90,8 +90,8 @@ services:
       - pg-data:/var/lib/postgresql/data
     networks: [sentinel-data]
 
-  # --- services/backend-api : REST + WebSocket, derrière le reverse proxy --------
-  # Ne parle pas à MQTT : lit la base (alertes, états) et écoute ses NOTIFY ; relaie au service
+  # --- services/backend-api : REST, derrière le reverse proxy --------------------
+  # Ne parle pas à MQTT : lit la base (alertes, états, interrogée par le dashboard) ; relaie au service
   # de détection (HTTP, sentinel-data) santé, entraînement et commandes ESP.
   sentinel-backend:
     build: ./services/backend-api

@@ -1,386 +1,654 @@
-# Sentinel-X — Dépôt Principal & Guide Complet
+# Sentinel-X
 
-Dépôt parent officiel de l'organisation [Sentinel-X-G4](https://github.com/Sentinel-X-G4).
-Il regroupe l'ensemble des composants du projet en sous-modules Git et orchestre l'ensemble de la pile applicative, de l'infrastructure et de la sécurité via un unique **Docker Compose**.
+Boîtier de surveillance autonome (Edge Node) : capteurs ESP8266, caméra USB avec IA de détection
+et reconnaissance faciale, détection d'incidents en temps réel et dashboard sécurisé, le tout
+orchestré par un seul `docker-compose.yml`.
+
+Dépôt parent de l'organisation [Sentinel-X-G4](https://github.com/Sentinel-X-G4) : il regroupe les
+composants en sous-modules Git et contient la seule configuration Docker Compose du projet.
 
 ---
 
 ## Sommaire
 
-1. [Architecture Globale & Flux](#architecture-globale--flux)
-2. [Prérequis](#prérequis)
-3. [Structure du Projet](#structure-du-projet)
-4. [Guide d'Installation Pas-à-Pas](#guide-dinstallation-pas-à-pas)
-5. [Configuration & Flash du Firmware ESP8266](#configuration--flash-du-firmware-esp8266)
-6. [Guide de Test et Validation (Vérifier que tout fonctionne)](#guide-de-test-et-validation)
-   - [Guide Dédié : Vérification du Flux ESP ➔ Mosquitto ➔ Base de Données](README_VERIFICATION_FLUX.md)
-7. [Commandes Utiles (Makefile)](#commandes-utiles-makefile)
-8. [Résolution des Problèmes Courants (Troubleshooting)](#résolution-des-problèmes-courants-troubleshooting)
+1. [Présentation](#présentation)
+2. [Architecture et stack](#architecture-et-stack)
+3. [Structure du dépôt](#structure-du-dépôt)
+4. [Prérequis](#prérequis)
+5. [Installation et configuration](#installation-et-configuration)
+6. [Lancement](#lancement)
+7. [Utilisation](#utilisation)
+8. [Tests et qualité](#tests-et-qualité)
+9. [Déploiement](#déploiement)
+10. [Sécurité](#sécurité)
+11. [Données et intégrations](#données-et-intégrations)
+12. [Dépannage](#dépannage)
+13. [Contribution](#contribution)
+14. [Licence, auteurs, changelog](#licence-auteurs-changelog)
 
 ---
 
-## Architecture Globale & Flux
+## Présentation
 
+**Contexte.** Projet du Workshop EPSI Mastère 1 (octobre 2026), « Mission Sentinel-X ». Le scénario :
+surveiller des micro-centrales isolées contre trois menaces, à savoir les intrusions physiques, les
+risques environnementaux (gaz, incendie, inondation) et les attaques réseau. Tout le calcul tourne
+sur un **PC Serveur Local** qui sert aussi de point d'accès Wi-Fi au boîtier.
+
+**Public.** Opérateurs de supervision (dashboard), administrateurs (comptes, visages, commandes
+de l'alarme) et équipe technique (Grafana, API de diagnostic).
+
+**Fonctionnalités**
+
+- Mesures en continu de l'ESP8266 (température, humidité, mouvement PIR, gaz MQ-2), envoyées environ 5 fois par seconde en MQTTS.
+- Détection de personnes (YOLO) et reconnaissance des visages autorisés (YuNet + SFace) sur une webcam USB.
+- Détection de quatre types d'alerte : `presence`, `fuite_gaz`, `feu` et `inondation`. Elle s'appuie sur des modèles Orange Data Mining, ou sur des règles en repli, avec un filet de sécurité gaz toujours actif.
+- Alarme physique automatique sur l'ESP (buzzer, LED, écran OLED), pilotable aussi depuis le dashboard.
+- Dashboard React avec rôles (`user`, `admin`, `superadmin`) et connexion par mot de passe ou par visage.
+- Historique en PostgreSQL/TimescaleDB, supervision dans Grafana.
+- Enregistrement de sessions étiquetées pour entraîner de nouveaux modèles Orange.
+
+**Statut.** Prototype de workshop, en développement actif. <!-- À COMPLÉTER : statut officiel (démo, rendu final…) -->
+
+---
+
+## Architecture et stack
+
+```mermaid
+flowchart LR
+    subgraph Hote["PC Serveur Local (hôte)"]
+        CAM[Webcam USB] --> CAP["host/capture.py<br/>ffmpeg → MJPEG :8088"]
+    end
+
+    ESP["ESP8266<br/>DHT22 · PIR · MQ-2<br/>buzzer · LED · OLED"]
+
+    subgraph Docker["docker compose (sentinel-x)"]
+        MQ["sentinel-mosquitto<br/>MQTTS :8883"]
+        DET["sentinel-detection<br/>Python / FastAPI :8000"]
+        VIS["sentinel-human-detection<br/>YOLO + visages<br/>aperçu :8089 · API :8090"]
+        DB[("g4-db<br/>PostgreSQL 16 + TimescaleDB")]
+        API["sentinel-backend<br/>Node.js / Express :5678"]
+        FRONT["sentinel-frontend<br/>React (nginx) :5678"]
+        RP["sentinel-reverse-proxy<br/>nginx :443 / :80"]
+        GRA["sentinel-grafana :3000"]
+    end
+
+    NAV[Navigateur]
+
+    ESP -- "telemetry / ack" --> MQ
+    MQ -- "cmd" --> ESP
+    CAP -- "HTTP MJPEG" --> VIS
+    VIS -- "camera" --> MQ
+    MQ --> DET
+    DET -- "cmd / detection" --> MQ
+    DET -- "écrit" --> DB
+    API -- "lit / acquitte" --> DB
+    API -- "HTTP (commandes, santé)" --> DET
+    API -- "HTTP (visages, image)" --> VIS
+    GRA -- "lecture seule" --> DB
+    NAV -- "HTTPS" --> RP
+    RP -- "/api/" --> API
+    RP -- "/" --> FRONT
 ```
-                        ┌────────────────────────────────────────────────────────┐
-                        │                     SENTINEL-X                         │
-                        └────────────────────────────────────────────────────────┘
-                                                    │
-                 [MQTTS : 8883 (TLS)]               │             [HTTPS : 443]
-       ┌───────────────────────────────────────┐    │    ┌───────────────────────────────┐
-       │                                       │    │    │                               │
-       ▼                                       ▼    │    ▼                               ▼
-┌─────────────┐                        ┌──────────────┐  │ ┌───────────────┐      ┌─────────────┐
-│   ESP8266   │                        │  Mosquitto   │  │ │ Nginx Reverse │ ───► │  Dashboard  │
-│  (Capteurs) │                        │ Broker MQTTS │  │ │     Proxy     │      │   (React)   │
-└─────────────┘                        └──────────────┘  │ └───────────────┘      └─────────────┘
-       │                                       │         │         │
-       │                                       │         │         ▼
-       │                                       ▼         │ ┌───────────────┐
-       │ (JSON Telemetry)            ┌──────────────────┐│ │  Backend API  │ (WebSocket
-       └───────────────────────────► │Detection Service ││ │   (Node.js)   │  & REST)
-                                     │   (ML & Règles)  ││ └───────────────┘
-                                     └──────────────────┘│         │
-                                               │         │         │
-                                               ▼         │         ▼
-                                     ┌─────────────────────────────────────┐
-                                     │   PostgreSQL / TimescaleDB (g4-db)  │
-                                     └─────────────────────────────────────┘
-```
 
-### Rôles des Conteneurs
+### Flux principaux
 
-| Conteneur | Port Hôte (via BIND_IP) | Rôle & Description |
+1. **Mesures** : l'ESP publie sur `sentinelx/esp01/telemetry`. Le service de détection calcule des features sur des fenêtres de 2 s et de 60 s, puis applique le modèle. Il lisse les résultats et écrit en base les mesures, les fenêtres, les prédictions et les alertes.
+2. **Caméra** : `capture.py` (sur l'hôte) diffuse la webcam en MJPEG. Le détecteur publie `{person, identity, names, faces}` sur `sentinelx/esp01/camera`, et le service de détection enregistre ce dernier état dans `detection.camera_state`.
+3. **Alarme** : quand une alerte s'active, le service de détection publie `alert on` et un message à l'écran sur `sentinelx/esp01/cmd`. L'ESP répond sur `.../ack`.
+4. **Dashboard** : le navigateur interroge `GET /api/v1/overview` et l'image de la caméra toutes les 0,5 s, via le reverse proxy. Le backend lit la base et relaie en HTTP vers la détection et la vision. **Il ne se connecte pas à MQTT** et n'utilise pas de WebSocket.
+
+### Stack et versions
+
+| Composant | Technologie | Version (source) |
 |---|---|---|
-| `sentinel-mosquitto` | `8883` (MQTTS) | Broker MQTT sécurisé (TLS v1.2+, comptes dédiés, ACL strictes). |
-| `sentinel-reverse-proxy`| `80` (redirection), `443` | Point d'entrée HTTPS unique (Dashboard + API REST/WebSocket). |
-| `sentinel-detection` | `127.0.0.1:18000` (debug) | Service Python d'ingestion et d'analyse temps réel des alertes/mesures. |
-| `sentinel-backend` | Interne (via proxy) | API REST & serveur WebSocket relayant les alertes vers le dashboard. |
-| `sentinel-frontend` | Interne (via proxy) | Dashboard React de supervision. |
-| `sentinel-human-detection`| `127.0.0.1:8089` (aperçu) | Détection IA vision par flux caméra USB (modèle YOLO). |
-| `g4-db` (service `db`)| Aucun (isolé) | Base de données PostgreSQL 16 + TimescaleDB. |
-| `simulator` (profil `sim`)| Aucun | Injection de données de test et simulation de scénarios. |
+| Firmware | C++ Arduino, PlatformIO, carte `nodemcuv2` (ESP-12E) | `espressif8266` ; libs : PubSubClient ^2.8, ArduinoJson ^7.0.0, DHT ^1.4.6, Adafruit SSD1306 ^2.5.9 ([platformio.ini](services/software/platformio.ini)) |
+| Broker | Eclipse Mosquitto | `eclipse-mosquitto:2` |
+| Reverse proxy | nginx | `nginx:1.27-alpine` |
+| Service de détection | Python 3.12, FastAPI, aiomqtt, SQLAlchemy async, Orange | orange3 3.40.0, scikit-learn 1.5.2 ([Dockerfile](services/backend-iot-alerts/detection-service/Dockerfile)) |
+| IA vision | Python 3.12, Ultralytics YOLO, OpenCV, paho-mqtt | torch 2.8.0, ultralytics 8.3.210, opencv-python-headless 4.12.0.88, modèle `yolo11n.pt` |
+| Backend API | Node.js, Express, pg, helmet, express-rate-limit | `node:20-alpine`, express ^5.2.1 |
+| Frontend | React, React Router, Vite | react ^19, vite ^7, servi par `nginxinc/nginx-unprivileged:alpine` |
+| Base | PostgreSQL 16 + TimescaleDB | `timescale/timescaledb:latest-pg16` |
+| Supervision | Grafana OSS | `grafana/grafana-oss:13.0.2` |
 
-### Matrice des Droits MQTT (ACL)
+### Réseaux Docker
 
-| Utilisateur | Topic(s) | Droits | Rôle |
+| Réseau | Relie | Isolé de l'extérieur |
+|---|---|---|
+| `sentinel-front` | proxy, backend, frontend | non |
+| `sentinel-back` | Mosquitto, détection, vision, simulateur | non |
+| `sentinel-data` | base, détection, backend, Grafana | **oui** (`internal`) |
+| `sentinel-vision` | backend ↔ API des visages | **oui** (`internal`) |
+| `sentinel-monitoring` | Grafana (publication du port) | non |
+
+---
+
+## Structure du dépôt
+
+```text
+main/
+├── docker-compose.yml          # SEUL compose du projet (tous les services)
+├── Makefile                    # Point d'entrée : make help
+├── .env.example                # Modèle de configuration (copié en .env par make init)
+├── README_VERIFICATION_FLUX.md # Test pas à pas ESP → Mosquitto → détection → base
+├── scripts/install-pki.sh      # Installe la PKI de secrets/ et signe les certificats serveur
+├── secrets/                    # PKI (ca.crt, ca.key, clés serveur) : NON versionné
+├── grafana/
+│   ├── db-user.sql             # Compte PostgreSQL lecture seule (rejoué à chaque up)
+│   ├── provisioning/           # Source de données + fournisseur de tableaux de bord
+│   └── dashboards/             # sentinel-overview.json
+└── services/                   # Sous-modules Git
+    ├── infrastructure/         # nginx.conf, Mosquitto (conf, ACL), scripts certs/comptes
+    ├── database/               # Image PostgreSQL + schéma (db/init) + migrations
+    ├── backend-iot-alerts/     # detection-service (Python) : moteur de détection
+    ├── human-detection-ia/     # detector/ (conteneur YOLO) + host/capture.py (hôte)
+    ├── backend-api/            # API REST Node.js (seule porte du dashboard)
+    ├── frontend-dashboard/     # Dashboard React
+    └── software/               # Firmware ESP8266 (PlatformIO)
+```
+
+| Sous-module | Dépôt | Branche suivie | Point d'entrée |
 |---|---|---|---|
-| `sentinel_iot` | `sentinelx/esp01/telemetry`, `sentinelx/esp01/alert`, `sentinelx/esp01/ack` | Écriture | Envoi des mesures et alertes matérielles de l'ESP |
-| `sentinel_iot` | `sentinelx/esp01/cmd` | Lecture | Réception d'ordres (buzzer, reset) |
-| `detection` | `sentinelx/+/telemetry`, `sentinelx/+/camera`, `sentinelx/+/alert` | Lecture | Ingestion de toutes les données capteurs |
-| `detection` | `sentinelx/+/detection` | Écriture | Publication des détections calculées |
-| `vision` | `sentinelx/+/camera` | Écriture | Publication des détections de présence humaine |
-| `simulator` | `sentinelx/+/telemetry`, `sentinelx/+/camera` | Écriture | Injection de fausses données (DEV) |
+| `services/infrastructure` | [infrastructure](https://github.com/Sentinel-X-G4/infrastructure) | `main` | [nginx.conf](services/infrastructure/nginx/nginx.conf), [mosquitto.conf](services/infrastructure/mosquitto/config/mosquitto.conf) |
+| `services/database` | [database](https://github.com/Sentinel-X-G4/database) | `main` | [db/init/](services/database/db/init/) |
+| `services/backend-iot-alerts` | [backend-iot-alerts](https://github.com/Sentinel-X-G4/backend-iot-alerts) | `main` | `detection_service/main.py` |
+| `services/human-detection-ia` | [human-detection-ia](https://github.com/Sentinel-X-G4/human-detection-ia) | `main` | `detector/detect.py`, `host/capture.py` |
+| `services/backend-api` | [backend-api](https://github.com/Sentinel-X-G4/backend-api) | `main` | [server.js](services/backend-api/server.js) |
+| `services/frontend-dashboard` | [frontend-dashboard](https://github.com/Sentinel-X-G4/frontend-dashboard) | `main` | [src/main.jsx](services/frontend-dashboard/src/main.jsx) |
+| `services/software` | [software](https://github.com/Sentinel-X-G4/software) | **`master`** | [src/main.cpp](services/software/src/main.cpp) |
+
+Chaque sous-module a son propre README, plus détaillé sur son composant.
 
 ---
 
 ## Prérequis
 
-- **Docker** (v24+) & **Docker Compose** (v2.20+)
-- **Git** (avec support sous-modules)
-- **Make** (présent nativement sur Linux/macOS ; via Git Bash, WSL ou MinGW sous Windows)
-- **PlatformIO CLI / VSCode Extension** (pour la compilation et le flash de l'ESP8266)
-- **OpenSSL** (utilisé pour la PKI, ou exécuté automatiquement via conteneur Docker si absent)
+| Outil | Usage | Remarque |
+|---|---|---|
+| Docker + Docker Compose v2 | toute la pile | Docker Desktop sous Windows/macOS |
+| Git | clone avec sous-modules | |
+| GNU Make + Bash | `Makefile`, scripts `.sh` | **Windows : Git Bash** (ou WSL). `make` : `winget install ezwinports.make` |
+| OpenSSL | génération des secrets (`make init`), certificats | Fourni avec Git Bash. `install-pki.sh` bascule sur un conteneur Alpine s'il est absent, **mais pas `make init`** |
+| Python 3.12 + ffmpeg (sur l'hôte) | capture de la webcam USB | Windows : `winget install Python.Python.3.12` et `winget install Gyan.FFmpeg` |
+| PlatformIO (CLI ou extension VS Code) | compiler et flasher l'ESP | Le Makefile trouve `pio` dans le PATH, puis dans `~/.platformio`, sinon `python -m platformio` |
+| Matériel | ESP8266 NodeMCU v3, DHT22, PIR, MQ-2, buzzer passif, LED rouge/verte, OLED SSD1306 I2C, webcam USB | Câblage : [Config.h](services/software/include/Config.h) |
+| PKI du projet | `secrets/` (ca.crt, ca.key, mosquitto.key, proxy.key, dhparam.pem) | Fournie hors dépôt. Sans elle, `make certs` génère des certificats de DEV |
+
+Le Wi-Fi de l'ESP doit être en **2,4 GHz**.
 
 ---
 
-## Structure du Projet
+## Installation et configuration
 
-```text
-main/
-├── docker-compose.yml           # Unique fichier Compose orchestrant la totalité de la stack
-├── Makefile                     # Commandes simplifiées multiplateformes
-├── .env.example                 # Modèle de variables d'environnement
-├── .env                         # Configuration locale active (ignoré par Git)
-├── scripts/
-│   └── install-pki.sh           # Installation PKI, signature des certificats serveur avec SAN IP
-├── secrets/                     # Clés privées et autorité de certification (ca.crt, ca.key, etc.)
-└── services/                    # Sous-modules Git
-    ├── infrastructure/          # Configurations Nginx, Mosquitto, scripts de gestion des utilisateurs
-    ├── backend-api/             # API Node.js / Express / WebSocket
-    ├── backend-iot-alerts/      # Moteur d'analyse IA et règles (Python / FastAPI)
-    ├── database/                # Scripts d'initialisation PostgreSQL / TimescaleDB
-    ├── frontend-dashboard/      # Interface graphique React
-    ├── human-detection-ia/      # Détecteur YOLO caméra USB
-    └── software/                # Firmware ESP8266 (PlatformIO C++)
-```
-
----
-
-## Guide d'Installation Pas-à-Pas
-
-Suivez ces étapes dans l'ordre. Les commandes sont exécutables sous **Linux**, **macOS** et **Windows** (dans un terminal Bash tel que **Git Bash** ou **WSL**).
-
-### Étape 1 : Cloner le dépôt et ses sous-modules
+Sous Windows, toutes les commandes ci-dessous se lancent dans **Git Bash**.
 
 ```bash
+# 1. Cloner avec les sous-modules
 git clone --recurse-submodules https://github.com/Sentinel-X-G4/main.git
 cd main
-```
 
-*(Si vous avez déjà cloné sans les sous-modules : `make init` ou `git submodule update --init --recursive`)*.
+# 2. Sous-modules sur leur branche, .env créé, secrets aléatoires générés
+make init
 
----
+# 3. Éditer .env (voir le tableau ci-dessous) : BIND_IP, mots de passe, Wi-Fi de l'ESP…
 
-### Étape 2 : Configurer les variables d'environnement (`.env`)
-
-Copiez le fichier d'exemple si `.env` n'existe pas :
-```bash
-cp .env.example .env
-```
-
-Éditez le fichier `.env` :
-1. **`BIND_IP`** : Définissez l'adresse IP sur laquelle les ports réseau (MQTTS 8883 et HTTPS 443) seront exposés :
-   - En local pur : `BIND_IP=127.0.0.1` ou `BIND_IP=0.0.0.0`
-   - Sur un réseau Wi-Fi / LAN avec l'ESP8266 : mettez l'IP locale de votre machine (ex: `BIND_IP=<VOTRE_IP_LOCALE>`).
-   > **Attention :** Ne mettez pas d'espace après le signe `=`, ex: `BIND_IP=192.168.1.50`.
-2. **`POSTGRES_PASSWORD`** : Mot de passe de la base de données.
-3. **Mots de passe MQTT** :
-   - `MQTT_ESP_PASSWORD` (mot de passe pour l'utilisateur `sentinel_iot`)
-   - `MQTT_DETECTION_PASSWORD`
-   - `MQTT_BACKEND_PASSWORD`
-   - `MQTT_VISION_PASSWORD`
-   - `MQTT_SIMULATOR_PASSWORD`
-4. **Clé API backend** : Générée automatiquement via `make init` ou `make backend-api-key`.
-
----
-
-### Étape 3 : Installer la PKI et générer les certificats TLS
-
-Les certificats du broker MQTT et du reverse proxy Nginx doivent être signés par l'autorité racine située dans le dossier des secrets (`secrets/ca.crt` et `secrets/ca.key`).
-De plus, le certificat du broker doit impérativement inclure votre adresse IP (`${BIND_IP}`) dans ses **Subject Alternative Names (SAN)** pour que la vérification TLS réussisse.
-
-Exécutez :
-```bash
+# 4. Certificats TLS (PKI de secrets/ si présente, sinon certificats de DEV)
 make certs
-```
-*(Équivalent direct sans make : `bash scripts/install-pki.sh`)*
 
-**Ce que fait cette étape :**
-- Vérifie la validité de la CA dans le dossier `secrets/`.
-- Génère `services/infrastructure/mosquitto/certs/mosquitto.crt` avec le nom de domaine `mqtt.sentinel.lan`, `localhost` et l'adresse IP définie dans la variable `${BIND_IP}` de votre `.env`.
-- Génère `services/infrastructure/nginx/certs/proxy.crt` pour le reverse proxy.
-- Copie la CA du dossier des secrets vers les dossiers de certificats requis.
-
----
-
-### Étape 4 : Créer les comptes et mots de passe Mosquitto
-
-Pour que Mosquitto accepte les connexions, il lui faut un fichier `password.txt` contenant les hashs des mots de passe définis dans le `.env` pour chaque rôle :
-
-Exécutez :
-```bash
+# 5. Comptes MQTT hashés depuis .env → services/infrastructure/mosquitto/config/password.txt
 make users
 ```
-*(Équivalent direct sans make : `bash services/infrastructure/scripts/mqtt-users.sh`)*
 
-Le fichier `services/infrastructure/mosquitto/config/password.txt` est alors généré de façon sécurisée via un conteneur Mosquitto éphémère à partir des variables `MQTT_*_PASSWORD`.
+`make init` fait quatre choses :
+- il copie `.env.example` en `.env` si `.env` n'existe pas ;
+- il relie `.env` à `services/infrastructure/.env` (lien symbolique, ou copie sous Windows) ;
+- il génère les secrets vides ou valant `change-me` : `BACKEND_API_KEY`, `VISION_API_KEY`, `DETECTION_ADMIN_TOKEN`, `GRAFANA_ADMIN_PASSWORD`, `GRAFANA_DB_PASSWORD` et `GRAFANA_SECRET_KEY` ;
+- il ne touche pas aux mots de passe PostgreSQL et MQTT : **remplissez-les vous-même**.
 
----
+> Sous Windows, `services/infrastructure/.env` est souvent une **copie** et non un lien. Après
+> avoir modifié `main/.env`, relancez `make init` (ou recopiez le fichier) pour que les scripts de
+> l'infra voient les nouvelles valeurs. <!-- À VÉRIFIER : ln -sfn sous Git Bash crée une copie sans mode développeur -->
 
-### Étape 5 : Démarrer la stack Docker
+`make certs` dépend de la présence de `secrets/ca.key` :
+- **Si elle est présente**, il lance `scripts/install-pki.sh`. Le certificat Mosquitto couvre `mqtt.sentinel.lan`, `localhost`, `192.168.40.1`, `127.0.0.1` et le `BIND_IP` du `.env`. Le certificat du proxy couvre en plus `dashboard.sentinel.lan` et `sentinel.local`.
+- **Sinon**, il génère des certificats de DEV valables 30 jours. Leur SAN **n'inclut pas** `BIND_IP` : un ESP sur le réseau ne pourra pas valider le broker, donc utilisez la vraie PKI pour l'ESP.
 
-Démarrez l'ensemble des conteneurs :
-```bash
-make up
-```
-*(Ou : `docker compose up --build -d`)*
+Si vous modifiez `BIND_IP`, relancez `make certs` puis `make up`.
 
-Vérifiez que tous les services sont en cours d'exécution :
-```bash
-make ps
-```
+### Variables d'environnement (`.env`)
 
-Tous les conteneurs doivent être `Up` et `healthy`.
+Le modèle complet est [`.env.example`](.env.example). Ne commitez jamais `.env`, il est déjà dans le `.gitignore`.
 
----
+| Variable | Rôle | Obligatoire | Exemple / défaut |
+|---|---|---|---|
+| `BIND_IP` | IP où sont publiés 443, 80 et 8883 | oui | `127.0.0.1` (dev), `192.168.40.1` (serveur) |
+| `POSTGRES_DB` / `POSTGRES_USER` | base et utilisateur | oui | `sentinel` / `sentinel` |
+| `POSTGRES_PASSWORD` | mot de passe de la base | oui | à définir |
+| `MQTT_ESP_PASSWORD` | compte `sentinel_iot` (ESP) | oui | à définir |
+| `MQTT_DETECTION_PASSWORD` | compte `detection` | oui | à définir |
+| `MQTT_VISION_PASSWORD` | compte `vision` | oui | à définir |
+| `MQTT_BACKEND_PASSWORD` | compte `iot-backend` (debug, lecture seule, utilisé par aucun service) | oui (pour `make users`) | à définir |
+| `MQTT_SIMULATOR_PASSWORD` | compte `simulator` | **dev seulement** | vide en prod (le compte n'est pas créé) |
+| `ESP_WIFI_SSID` / `ESP_WIFI_PASSWORD` | Wi-Fi 2,4 GHz de l'ESP | pour `make flash` | |
+| `ESP_MQTT_HOST` | IP du broker vue par l'ESP | pour `make flash` | `= BIND_IP` |
+| `NODE_ENV` | mode du backend | non | `production` |
+| `FRONTEND_URL` | origine(s) CORS autorisée(s), séparées par des virgules | non | `https://dashboard.sentinel.lan` |
+| `BACKEND_API_KEY` | clé des services (≥ 32 caractères), sert aussi à signer les sessions | oui | générée par `make init` |
+| `ADMIN_USERNAME` / `ADMIN_PASSWORD` | superadmin créé au 1er démarrage (table `users` vide) | oui au 1er démarrage | `admin` / à définir |
+| `DETECTION_ADMIN_TOKEN` | jeton backend → routes d'action de la détection | oui | généré par `make init` |
+| `PREDICTOR` | `auto`, `orange` ou `rules` | non | `auto` |
+| `WARMUP_SECONDS` | préchauffage sans prédiction | non | `120` (ex. `20` pour une démo) |
+| `LOG_LEVEL` | logs de la détection | non | `INFO` |
+| `DETECTION_API_PORT` | port local de l'API de la détection | non | `8000` |
+| `CAMERA_DEVICE_ID` | `device_id` publié par la caméra (celui de l'ESP de la pièce) | non | `esp01` |
+| `CAMERA_STREAM_URL` | flux MJPEG de l'hôte | non | `http://host.docker.internal:8088/stream` |
+| `CAMERA_PREVIEW_PORT` | port local du flux annoté | non | `8089` |
+| `YOLO_MODEL` / `YOLO_CONF` | modèle et seuil YOLO | non | `yolo11n.pt` / `0.35` |
+| `VISION_API_KEY` | clé backend ↔ API des visages (≥ 32 caractères) | oui | générée par `make init` |
+| `FACE_MATCH_THRESHOLD` | similarité cosinus minimale | non | `0.363` |
+| `SIM_DEVICE` | `device_id` du simulateur | non | `esp01` |
+| `GRAFANA_BIND_IP` / `GRAFANA_PORT` | publication de Grafana | non | `127.0.0.1` / `3000` |
+| `GRAFANA_ROOT_URL` | URL publique de Grafana | non | `http://localhost:3000/` |
+| `GRAFANA_ADMIN_USER` | admin Grafana | non | `admin` |
+| `GRAFANA_DB_USER` | compte PostgreSQL lecture seule | oui | `grafana_reader` |
+| `GRAFANA_ADMIN_PASSWORD` / `GRAFANA_DB_PASSWORD` / `GRAFANA_SECRET_KEY` | secrets Grafana | oui | générés par `make init` |
 
-## Configuration & Flash du Firmware ESP8266
-
-Le firmware se trouve dans le sous-module `services/software`.
-
-### 1. Identifiants (`.env`)
-
-Aucun secret n'est écrit dans le code du firmware : ils sont lus dans le `.env` de la pile, à
-remplir une seule fois :
-
-```ini
-ESP_WIFI_SSID=NOM_DU_RESEAU_2_4GHZ
-ESP_WIFI_PASSWORD=MOT_DE_PASSE_WIFI
-ESP_MQTT_HOST=<BIND_IP>          # IP de la machine qui fait tourner la pile
-MQTT_ESP_PASSWORD=...            # déjà utilisé par `make users` pour le compte sentinel_iot
-```
-
-À chaque compilation, `services/software/scripts/secrets.py` génère `include/Secrets.h` (ignoré
-par Git) à partir de ces valeurs ; une variable d'environnement du même nom est prioritaire. Si
-une valeur manque, la compilation s'arrête en la nommant. Le reste de la configuration (broches,
-seuils, `DEVICE_ID`, port 8883) est dans `services/software/include/Config.h`.
-
-### 2. Certificat CA embarqué automatique
-
-Lors de la compilation, PlatformIO exécute automatiquement le script `services/software/scripts/embed_ca.py` qui lit la CA racine dans le dossier des secrets (`secrets/ca.crt`) et génère `services/software/include/MqttCa.h`. L'ESP vérifie ainsi la chaîne cryptographique du serveur sans altération possible.
-
-### 3. Compilation et Flash
-
-Branchez l'ESP8266 en USB à votre ordinateur :
-
-- **Compiler le code :**
-  ```bash
-  cd services/software
-  pio run
-  ```
-- **Téléverser vers l'ESP8266 :**
-  ```bash
-  pio run -t upload
-  # Ou depuis la racine du projet :
-  make flash
-  ```
-- **Ouvrir le moniteur série :**
-  ```bash
-  pio device monitor
-  # Ou depuis la racine du projet :
-  make monitor
-  ```
-
-Dès le démarrage, l'ESP se connecte au Wi-Fi, synchronise l'heure via NTP (nécessaire pour la validation des dates de certificats TLS) puis se connecte au broker Mosquitto en MQTTS :
-```text
-[MQTT] connected
-```
+Les variables `SIM_SEQUENCE` (séquence du simulateur) et `INSTALL_ORANGE` existent aussi. La
+seconde n'est lue par aucun fichier de la pile.
 
 ---
 
-## Guide de Test et Validation
+## Lancement
 
-Voici comment vérifier méthodiquement que chaque brique fonctionne de manière autonome :
-
-### Test 1 : Vérifier l'état global des conteneurs
+### Pile complète
 
 ```bash
-docker compose ps
+make up        # docker compose up --build -d
+make ps        # état des conteneurs
+make logs      # logs de tous les conteneurs (Ctrl+C pour quitter)
+make down      # arrêt (volumes conservés)
 ```
-**Résultat attendu :**
-- `sentinel-mosquitto` : `Up` (port 8883)
-- `sentinel-detection` : `Up (healthy)`
-- `sentinel-backend` : `Up (healthy)`
-- `sentinel-reverse-proxy` : `Up` (ports 80 et 443)
-- `g4-db` : `Up (healthy)`
 
----
+### Capture de la webcam (sur l'hôte, à part)
 
-### Test 2 : Tester la connectivité TCP du port 8883
+Docker Desktop n'a pas accès à l'USB : la webcam est lue **sur l'hôte** par `capture.py`, que le
+conteneur `sentinel-human-detection` consomme sur le port 8088.
 
-Sous Linux / macOS / Git Bash :
 ```bash
-curl -v telnet://${BIND_IP}:8883 --connect-timeout 3
-# Ou avec netcat :
-nc -zv ${BIND_IP} 8883
+cd services/human-detection-ia
+make setup      # une fois : crée .venv (Python 3.12) et installe les dépendances
+make cameras    # vérifie la webcam USB détectée
+make capture    # laisser tourner dans un terminal dédié
 ```
-Sous Windows PowerShell :
+
+Sous Windows sans `make`, depuis PowerShell dans `services/human-detection-ia` :
+
 ```powershell
-Test-NetConnection -ComputerName $env:BIND_IP -Port 8883
-```
-**Résultat attendu :** Connexion réussie (`TcpTestSucceeded : True` ou `Connected`).
-
----
-
-### Test 3 : Tester la connexion MQTTS (TLS 8883) avec le compte ESP
-
-Vous pouvez simuler l'envoi d'une trame télémétrique identique à celle de l'ESP8266 en utilisant le client Mosquitto dans un conteneur éphémère :
-
-```bash
-echo '{"ts":1728289070000,"temp":22.5,"hum":45.0,"pir":0,"gas_raw":120,"gas_do":1,"warmup":false}' | \
-docker run --rm -i -v "${PWD}/secrets/ca.crt:/certs/ca.crt:ro" eclipse-mosquitto:2 \
-  mosquitto_pub -h ${BIND_IP} -p 8883 --cafile /certs/ca.crt \
-  -u sentinel_iot -P ${MQTT_ESP_PASSWORD} -t "sentinelx/esp01/telemetry" -l
+py -3.12 -m venv .venv
+.venv\Scripts\python host\capture.py
 ```
 
-**Résultat attendu :** La commande s'exécute sans erreur et se termine avec le code 0.
+Au premier lancement, le pare-feu Windows demande d'autoriser Python : acceptez au moins pour les
+réseaux privés. Sinon, le conteneur ne joint pas le port 8088.
 
----
+> N'utilisez **pas** `make up` dans `services/human-detection-ia` quand la pile tourne : cette
+> commande lance un détecteur autonome (`human-detector`) qui entre en conflit avec le port 8089 de
+> la pile.
 
-### Test 4 : Vérifier l'ingestion par le service de détection
+### Ports
 
-Consultez les logs récents du service de détection :
+| Service | Adresse | Accès |
+|---|---|---|
+| Dashboard + API | `https://<BIND_IP>/` (80 redirige vers 443) | réseau local |
+| MQTTS | `<BIND_IP>:8883` | ESP |
+| Grafana | `http://127.0.0.1:3000` | local (ou tunnel SSH) |
+| API de la détection | `http://127.0.0.1:${DETECTION_API_PORT}` (`/health`, `/docs`) | local |
+| Flux annoté (YOLO) | `http://127.0.0.1:8089/` | local |
+| Flux brut de la webcam | `http://localhost:8088/stream` | hôte (`capture.py`) |
+| Backend, frontend, API des visages, PostgreSQL | 5678, 5678, 8090, 5432 | **réseaux Docker uniquement** |
+
+### Vérifier que tout fonctionne
+
 ```bash
+docker compose ps                                  # tout est Up, et healthy là où un healthcheck existe
+curl -sk https://127.0.0.1/api/health              # {"status":"OK","uptime":…}  (remplacer par BIND_IP)
+curl -s http://127.0.0.1:8000/health               # "mqtt": connected, "database": reachable (port = DETECTION_API_PORT)
 docker logs --tail 20 sentinel-detection
 ```
-**Résultat attendu :**
-```text
-INFO detection_service.mqtt_client: MQTT connecté host=mqtt.sentinel.lan port=8883
-INFO detection_service.engine: nouvel appareil device_id=esp01
-INFO detection_service.engine: changement d'état device_id=esp01 status=aucune device_state=warming_up
-```
 
-Vous pouvez également interroger l'API de diagnostic :
-```bash
-curl -s http://127.0.0.1:18000/health
-```
-La réponse JSON doit afficher `"mqtt":{"connected":true}` et `"database":{"reachable":true}`.
+Le dashboard est sur `https://<BIND_IP>/`. Le nom `dashboard.sentinel.lan` n'est utilisable que
+s'il est déclaré dans le fichier hosts du poste client (`C:\Windows\System32\drivers\etc\hosts`
+sous Windows, `/etc/hosts` ailleurs). Pour éviter l'avertissement du navigateur, importez
+`secrets/ca.crt` dans le magasin de certificats de confiance.
+
+Pour un test complet de bout en bout (trame MQTT simulée, puis vérification en base), suivez le
+[guide de vérification du flux](README_VERIFICATION_FLUX.md).
+
+### Développement d'un service hors Docker
+
+Chaque sous-module documente son lancement local :
+- `backend-api` : `npm ci && npm run dev`, qui lit `../../.env` ; port 3000.
+- `frontend-dashboard` : `npm run dev`, sur le port 5173, avec `/api` relayé vers `VITE_BACKEND_URL` (défaut `localhost:3000`).
+- `detection-service` : `pip install -e ".[dev]"` puis `detection-service`.
 
 ---
 
-### Test 5 : Tester le Reverse Proxy et l'API Backend
+## Utilisation
 
-Testez le point d'entrée sécurisé HTTP(S) :
+### Dashboard
+
+Connexion avec `ADMIN_USERNAME` / `ADMIN_PASSWORD` (superadmin créé au premier démarrage).
+
+| Page | user | admin | superadmin |
+|---|:-:|:-:|:-:|
+| Supervision (indicateurs, webcam + identité, appareils, courbes, alertes) | ✓ | ✓ | ✓ |
+| Alertes (historique filtrable) | lecture | + acquittement | + acquittement, suppression |
+| Comptes | | comptes `user` | tous |
+| Visages autorisés | | ✓ | ✓ |
+| Service IoT (santé de la détection) | | ✓ | ✓ |
+| Mon compte | ✓ | ✓ | ✓ |
+
+La connexion par visage est possible pour les rôles `user` et `admin` : saisir son identifiant
+et se placer seul face à la caméra. Elle n'est pas proposée aux superadmins.
+
+### API
+
+Tout `/api/v1/*` exige `Authorization: Bearer <jeton>`. Le jeton est un jeton de session valable
+8 h, ou `BACKEND_API_KEY` pour les services. La liste complète des routes est dans le
+[README du backend](services/backend-api/README.md).
+
 ```bash
-curl -sk https://${BIND_IP}/api/health
+# Obtenir un jeton
+curl -sk https://<BIND_IP>/api/v1/auth/login -H 'Content-Type: application/json' \
+  -d '{"username":"admin","password":"…"}'          # → data.token
+
+# Déclencher puis réinitialiser l'alarme de l'ESP
+curl -sk -X POST https://<BIND_IP>/api/v1/devices/esp01/alert -H "Authorization: Bearer $TOKEN" \
+  -H 'Content-Type: application/json' -d '{"state":"on"}'
+curl -sk -X POST https://<BIND_IP>/api/v1/devices/esp01/reset -H "Authorization: Bearer $TOKEN"
 ```
-**Résultat attendu :**
+
+### Firmware ESP8266
+
+1. Renseigner `ESP_WIFI_SSID`, `ESP_WIFI_PASSWORD`, `ESP_MQTT_HOST` (= `BIND_IP`) et `MQTT_ESP_PASSWORD` dans `.env`.
+2. Brancher l'ESP en USB, puis :
+
+```bash
+make flash      # compile + téléverse (cd services/software && pio run -t upload)
+make monitor    # moniteur série 115200 bauds
+```
+
+Avant chaque compilation, deux scripts génèrent des fichiers non versionnés :
+- `scripts/secrets.py` génère `include/Secrets.h` à partir de `.env`. Une variable d'environnement du même nom est prioritaire.
+- `scripts/embed_ca.py` génère `include/MqttCa.h` à partir de `secrets/ca.crt`, ou de `SENTINEL_CA=/chemin/ca.crt`.
+
+`DEVICE_ID` est fixé à `esp01` dans [Config.h](services/software/include/Config.h) et l'ACL
+Mosquitto n'autorise que ce `device_id`.
+
+### Données simulées (sans matériel)
+
+```bash
+make sim        # profil sim : faux ESP + caméra, séquence normal / presence / fuite_gaz / feu / inondation / capteur_muet
+```
+
+Le simulateur exige un `MQTT_SIMULATOR_PASSWORD` non vide, suivi de `make users`.
+
+### Grafana
+
+Ouvrir `http://127.0.0.1:3000` et se connecter avec `GRAFANA_ADMIN_USER` / `GRAFANA_ADMIN_PASSWORD`.
+Le tableau de bord **Sentinel-X — Vue d'ensemble** est provisionné. Pour en modifier un, faites-le
+dans l'interface, puis exportez le JSON dans [grafana/dashboards/](grafana/dashboards/).
+
+### Entraîner les modèles Orange
+
+1. Enregistrer des sessions étiquetées avec `POST /recording/start|stop` sur l'API de la détection (`127.0.0.1:${DETECTION_API_PORT}`), ou avec `/api/v1/iot/recording/*` du backend en superadmin. Le dashboard n'a pas encore d'écran pour cela.
+2. Exporter les données :
+
+   ```bash
+   docker compose exec -T detection-service python tools/export_dataset.py --target feu --orange-flags > feu.csv
+   ```
+
+3. Entraîner dans Orange, puis exporter les fichiers `<type>.pkcls` dans `services/backend-iot-alerts/detection-service/models/`.
+4. Recharger le modèle sans redémarrer :
+
+   ```bash
+   docker compose kill -s HUP detection-service
+   ```
+
+La procédure complète est dans le [README du service de détection](services/backend-iot-alerts/detection-service/README.md#modèles-orange).
+
+### Base de données
+
+```bash
+make db                       # console psql
+make db-sql F=chemin.sql      # appliquer un script (migrations)
+make db-backup                # dump dans backups/ (format pg_dump custom)
+make db-reset                 # DESTRUCTIF : supprime le volume et rejoue db/init
+```
+
+---
+
+## Tests et qualité
+
+Il n'y a **aucune CI** et **aucune suite de tests automatisés** exécutable dans l'état actuel :
+
+- `backend-api` : `npm test` n'est pas implémenté. Le lint se lance avec `npm run lint` / `npm run lint:fix` (ESLint).
+- `detection-service` : `pytest` est configuré dans `pyproject.toml`, mais le dossier `tests/` est absent du dépôt.
+- `frontend-dashboard` et firmware : pas de tests.
+
+Les validations se font donc manuellement :
+- `make sim` ;
+- le [guide de vérification du flux](README_VERIFICATION_FLUX.md) ;
+- `GET /health` de la détection ;
+- les healthchecks Docker.
+
+---
+
+## Déploiement
+
+Il n'y a pas de pipeline : on déploie en exécutant la même procédure sur le PC Serveur Local.
+
+1. Sur le serveur : `BIND_IP=192.168.40.1` (IP prévue par les certificats), `MQTT_SIMULATOR_PASSWORD` vide, mots de passe forts.
+2. `make init`, puis `make certs` avec la vraie PKI dans `secrets/`, puis `make users` et `make up`.
+3. Flasher l'ESP avec `ESP_MQTT_HOST` égal à l'IP du serveur.
+4. Lancer `capture.py` sur le serveur, qui porte la webcam.
+
+Pour mettre à jour : `make pull` (parent et sous-modules en fast-forward), puis `make up`. La
+commande `up` reconstruit les images.
+
+Pour revenir en arrière : il n'y a pas de procédure dédiée. Il faut revenir au commit précédent du
+parent, puis lancer `git submodule update` et `make up`. Faites un `make db-backup` avant toute
+mise à jour.
+
+Un changement de schéma sur une base existante n'est pas rejoué automatiquement, car `db/init` ne
+s'exécute que sur un volume vide. Appliquez le fichier de `services/database/db/migrations/` avec
+`make db-sql F=…`.
+
+---
+
+## Sécurité
+
+**Exposition réseau**
+- Seuls 443, 80 (redirection) et 8883 sont publiés, et uniquement sur `BIND_IP`.
+- Grafana, l'API de la détection et le flux annoté sont limités à `127.0.0.1`.
+- La base et l'API des visages sont sur des réseaux Docker `internal`.
+
+**MQTT**
+- TLS 1.2 uniquement, port 1883 désactivé, `allow_anonymous false`.
+- Un compte par rôle, avec des ACL par topic : [acl](services/infrastructure/mosquitto/config/acl).
+- Limites anti-DoS : 20 connexions, messages de 8 Ko au maximum.
+
+**HTTPS (nginx)**
+- TLS 1.2/1.3, HSTS, `X-Frame-Options`, `nosniff`, `Referrer-Policy`, version masquée.
+- Rate limiting à 30 req/s par IP.
+
+**Backend**
+- Clé d'API obligatoire en production, comparée en temps constant.
+- Mots de passe hachés avec scrypt, sessions signées de 8 h.
+- Rôles relus en base à chaque requête.
+- Frein au brute-force : 20 échecs par 15 min.
+- Rate limiting à 1 800 requêtes/min, corps de requête limité à 10 Ko.
+- helmet, CORS restreint, protection contre l'injection dans les logs.
+
+**Conteneurs**
+- `no-new-privileges`, `cap_drop: ALL` sur l'infra, systèmes de fichiers `read_only` pour le proxy, Mosquitto et Grafana.
+- Utilisateurs non-root, logs plafonnés à 3 × 10 Mo.
+
+**Secrets**
+- `.env`, `secrets/`, `password.txt`, les clés et les fichiers générés du firmware (`Secrets.h`, `MqttCa.h`) sont exclus de Git.
+- La PKI chiffrée peut être restaurée avec `services/infrastructure/scripts/decrypt-secrets.sh`.
+
+**Données biométriques**
+- Les empreintes de visages (volume `faces-data`) sont des données sensibles (RGPD, art. 9) : elles ne quittent jamais la machine et ne sont pas sauvegardées.
+
+**Limites connues**
+- Les routes `/recording/*` de l'API de la détection ne demandent pas de jeton : elles ne sont protégées que par la publication sur `127.0.0.1`.
+- Le certificat client n'est pas exigé par Mosquitto (`require_certificate false`).
+
+Pour signaler une faille : <!-- À COMPLÉTER : contact / procédure -->
+
+---
+
+## Données et intégrations
+
+### Topics MQTT
+
+| Topic | Émetteur → destinataire | Compte |
+|---|---|---|
+| `sentinelx/esp01/telemetry` | ESP → détection (~5 msg/s) | `sentinel_iot` |
+| `sentinelx/esp01/ack` | ESP → détection | `sentinel_iot` |
+| `sentinelx/esp01/alert` | ESP → détection (plus publié par le firmware actuel) | `sentinel_iot` |
+| `sentinelx/esp01/cmd` | détection → ESP | `detection` |
+| `sentinelx/+/camera` | vision → détection (au moins 1 msg/s) | `vision`, `simulator` |
+| `sentinelx/+/detection` | détection → (informatif) | `detection` |
+
 ```json
-{"status":"OK","uptime":759.27}
+// telemetry : pir et gas_raw (0–1023) obligatoires
+{"ts": 1728136800123, "temp": 22.4, "hum": 45.1, "pir": 1, "gas_raw": 312, "gas_do": 0, "warmup": false}
+// camera
+{"ts": 1728136800150, "person": true, "identity": "authorized", "names": ["Alice"], "faces": [{"name": "Alice"}]}
+// cmd / ack
+{"id": "<uuid>", "command": "alert", "state": "on"}
+{"id": "<uuid>", "command": "alert", "ok": true, "state": {"alert": …, "buzzer": …, "led": …, "screen": …}}
 ```
 
----
+Les contrats détaillés sont dans [MQTT_CONTRACT.md](services/backend-iot-alerts/detection-service/docs/MQTT_CONTRACT.md),
+[BACKEND_CONTRACT.md](services/backend-iot-alerts/detection-service/docs/BACKEND_CONTRACT.md) et les
+[JSON Schema](services/backend-iot-alerts/detection-service/docs/schemas/).
 
-### Test 6 : Injecter des données simulées complètes
+### Base de données
 
-Pour valider le calcul des alertes (fumée, fuite de gaz, incendie) sans matériel physique :
-```bash
-make sim
-```
-Le conteneur injecte une séquence temporelle prédéfinie visible en direct dans les logs de `sentinel-detection`.
+| Table | Écrite par | Lue par |
+|---|---|---|
+| `public.alerts` | détection (activation d'une alerte) | backend (liste, stats, acquittement), Grafana |
+| `public.users` | backend | backend |
+| `detection.sensor_readings`, `camera_events`, `feature_windows` (hypertables) | détection | détection (entraînement), Grafana |
+| `detection.predictions` | détection (changement d'état + heartbeat 10 s) | backend (état des appareils) |
+| `detection.camera_state` | détection | backend (`/overview`, `/camera`) |
+| `detection.recording_sessions` | détection | détection |
 
----
+Le schéma est défini à un seul endroit, [services/database/db/init/](services/database/db/init/) ;
+aucun service ne crée de table. Les triggers `NOTIFY` sont définis dans `03_notify.sql`.
 
-## Commandes Utiles (Makefile)
+Volume indicatif : environ 430 000 mesures par jour et par appareil. Une politique de rétention
+TimescaleDB est recommandée, mais n'est pas configurée.
 
-| Commande | Action |
+### Volumes Docker
+
+| Volume | Contenu |
 |---|---|
-| `make help` | Affiche l'aide de toutes les commandes disponibles. |
-| `make init` | Initialise les sous-modules Git et crée le fichier `.env`. |
-| `make certs` | Génère et installe les certificats TLS de la PKI. |
-| `make users` | Génère les comptes MQTT hashés dans `password.txt`. |
-| `make up` | Démarre toute la pile en arrière-plan. |
-| `make down` | Arrête la pile Docker (conserve les volumes et données). |
-| `make logs` | Affiche les logs en direct de tous les services (`Ctrl+C` pour quitter). |
-| `make ps` | Affiche l'état détaillé de chaque conteneur. |
-| `make sim` | Lance la simulation d'un faux ESP + caméra. |
-| `make db` | Ouvre un terminal SQL interactif dans la base de données. |
-| `make db-backup`| Exécute un backup PostgreSQL dans `backups/`. |
-| `make flash` | Compile et téléverse le firmware ESP8266 branché en USB. |
-| `make monitor` | Ouvre le moniteur série de l'ESP8266 (115200 bauds). |
+| `pg-data` | base PostgreSQL |
+| `mosquitto-data` | persistance du broker |
+| `faces-data` | visages autorisés (biométrie) |
+| `grafana-data` | utilisateurs et préférences Grafana |
 
 ---
 
-## Résolution des Problèmes Courants (Troubleshooting)
+## Dépannage
 
-### 1. Erreur : `password-file: Error: Unable to open pwfile "/mosquitto/config/password.txt"`
-- **Cause :** Les comptes Mosquitto n'ont pas été générés avant le démarrage.
-- **Solution :** Lancez `make users` puis redémarrez Mosquitto : `docker compose restart sentinel-mosquitto`.
+**`Unable to open pwfile "/mosquitto/config/password.txt"`**
+Les comptes MQTT n'ont pas été générés. Lancez `make users`, puis `docker compose restart sentinel-mosquitto`.
 
-### 2. Dossier fantôme `ca.crt` dans `services/infrastructure/mosquitto/certs/`
-- **Cause :** Docker a créé un répertoire `ca.crt` car `docker compose up` a été lancé alors que le fichier de certificat n'existait pas encore.
-- **Solution :**
-  ```bash
-  make down
-  rm -rf services/infrastructure/mosquitto/certs/ca.crt
-  make certs
-  make up
-  ```
+**Un dossier `ca.crt` apparaît dans `services/infrastructure/mosquitto/certs/`**
+Docker a créé un répertoire à la place du fichier, parce que `up` a été lancé avant `make certs`.
+```bash
+make down && rm -rf services/infrastructure/mosquitto/certs/ca.crt && make certs && make up
+```
 
-### 3. Échec de vérification TLS côté ESP (`connection failed, state=-2`)
-- **Cause 1 (Horloge non synchronisée) :** Le client TLS (BearSSL) refuse le certificat si la date locale de l'ESP est en 1970. Vérifiez que la connexion Wi-Fi de l'ESP a accès à Internet pour joindre le serveur NTP (`pool.ntp.org`).
-- **Cause 2 (Adresse IP non présente dans le SAN) :** Le certificat du broker n'a pas été généré avec l'IP actuelle. Vérifiez `BIND_IP` dans `.env`, puis relancez `make certs` et `docker compose restart sentinel-mosquitto`.
+**`... manquant dans .env` au `docker compose up`**
+Une variable obligatoire est vide. Relancez `make init` pour les secrets générés ; renseignez les
+autres à la main.
 
-### 4. Erreur d'exécution de script sur Windows (`pipefail` ou chemins MSYS)
-- Les scripts `scripts/install-pki.sh` et `services/infrastructure/scripts/mqtt-users.sh` intègrent `export MSYS_NO_PATHCONV=1` et utilisent un dossier temporaire local. Exécutez-les toujours via **Git Bash**, **WSL** ou via `make`. Si OpenSSL n'est pas présent sur l'hôte, le script bascule automatiquement dans un conteneur Docker Alpine.
+**L'ESP ne se connecte pas au broker (`state=-2`, échec TLS)**
+- `BIND_IP` est absent du certificat : vérifiez `.env`, puis `make certs` et `docker compose restart sentinel-mosquitto`.
+- `ESP_MQTT_HOST` diffère de `BIND_IP` : reflashez.
+- Les certificats de DEV sont utilisés : leur SAN n'inclut pas l'IP du LAN.
+- Pas d'Internet, donc pas de NTP : le firmware valide alors les dates par rapport à la date de compilation. Recompilez si la CA est plus récente que le firmware.
+- Le pare-feu Windows bloque 8883 en entrée. <!-- À VÉRIFIER -->
+
+**`sentinel-human-detection` n'affiche aucune détection**
+`capture.py` ne tourne pas sur l'hôte, ou le pare-feu bloque le port 8088. Testez avec
+`curl -s http://localhost:8088/health`.
+
+**Webcam trouvée mais `refuse de s'ouvrir` / `Could not run graph`**
+Windows : Paramètres → Confidentialité → Caméra, puis autoriser les applications de bureau. Vérifiez
+aussi qu'aucune autre application n'utilise la webcam.
+
+**Le dashboard renvoie 429**
+C'est le rate limiting (30 req/s par IP). Derrière Docker Desktop, tous les clients peuvent
+partager la même IP : fermez les onglets en trop.
+
+**Une nouvelle table ou colonne est absente sur une base existante**
+Appliquez la migration : `make db-sql F=services/database/db/migrations/<fichier>.sql`.
+
+**Scripts `.sh` en échec sous Windows (chemins `/CN=…` déformés, `\r`)**
+Lancez-les via `make` dans Git Bash. Les scripts positionnent `MSYS_NO_PATHCONV=1` et retirent les `\r` du `.env`.
+
+**Logs utiles**
+```bash
+docker logs -f sentinel-detection
+docker logs -f sentinel-backend
+docker logs -f sentinel-mosquitto
+docker logs -f sentinel-human-detection
+```
+
+---
+
+## Contribution
+
+Chaque composant vit dans **son propre dépôt** : on commite dans le sous-module, puis on met à jour
+la référence dans `main`.
+
+```bash
+make status     # commit et branche de chaque sous-module
+make pull       # pull du parent puis de chaque sous-module (fast-forward)
+make update     # avance chaque sous-module sur sa branche suivie
+make push       # push des sous-modules (branche courante) puis du parent
+```
+
+Conventions observées dans l'historique :
+- messages de commit `feat:`, `fix:`, `doc:`, `chore:`, `security:` ;
+- branche `main`, sauf `software` qui suit `master` ;
+- chaque PR passe par GitHub.
+
+Quand on modifie un contrat, plusieurs fichiers doivent rester alignés :
+
+| Changement | Fichiers à aligner |
+|---|---|
+| Schéma de la base | `database/db/init/02_detection.sql` ↔ `detection_service/storage/tables.py` ; `alerts` ↔ `backend-api/db.js` ; ajouter une migration |
+| Topics MQTT | `mosquitto/config/acl` ↔ `docs/MQTT_CONTRACT.md` ↔ firmware |
+| Nouvelle variable | `.env.example` + `docker-compose.yml` + ce README |
+
+<!-- À COMPLÉTER : règles de revue de code, style imposé -->
+
+---
+
+## Licence, auteurs, changelog
+
+**Licence** : <!-- À COMPLÉTER : aucune licence définie pour le dépôt parent (backend-api déclare ISC dans package.json) -->
+
+**Auteurs** : groupe G4, Workshop EPSI M1 2026-27. <!-- À COMPLÉTER : noms et rôles de chaque membre -->
+
+**Changelog** : pas de fichier dédié. Consultez `git log` du dépôt parent et de chaque sous-module.
+<!-- À COMPLÉTER : versions / jalons -->
