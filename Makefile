@@ -1,7 +1,10 @@
 INFRA    := services/infrastructure
 FIRMWARE := services/software
-# pio du PATH, sinon celui installé par l'extension PlatformIO de VS Code
-PIO      ?= $(shell command -v pio 2>/dev/null || echo $(HOME)/.platformio/penv/bin/pio)
+# pio du PATH, sinon celui de l'extension PlatformIO de VS Code, sinon le module Python
+# ($(HOME) peut être mal formé sous Git Bash/Windows, d'où le test -x)
+PIO      ?= $(shell command -v pio 2>/dev/null || \
+              { [ -x "$(HOME)/.platformio/penv/bin/pio" ] && echo "$(HOME)/.platformio/penv/bin/pio"; } || \
+              echo "python -m platformio")
 .PHONY: help init backend-api-key vision-api-key detection-admin-token grafana-secrets pull update push status certs pki users up down logs ps sim \
         db db-sql db-backup db-reset flash monitor
 
